@@ -1,12 +1,12 @@
 {
-    "name": "mcp_manager",
-    "short_name": "mcp_manager",
+    "name": "MCP Manager",
+    "short_name": "MCP Manager",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
-    "orientation": "portrait-primary",
+    "background_color": "#0F1318",
+    "theme_color": "#0B0F14",
+    "description": "Manage MCP servers, audit tool calls and operate them with Gemma 4.",
+    "orientation": "any",
     "prefer_related_applications": false,
     "icons": [
         {
