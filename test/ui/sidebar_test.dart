@@ -13,6 +13,28 @@ void main() {
         tester.widget<NavigationRail>(find.byType(NavigationRail));
 
     expect(rail().extended, isTrue);
+    final railFinder = find.byType(NavigationRail);
+    final brandText = find.descendant(
+      of: railFinder,
+      matching: find.text('MCP Manager'),
+    );
+    expect(brandText, findsOneWidget);
+    final dividers = find.descendant(
+      of: railFinder,
+      matching: find.byType(Divider),
+    );
+    expect(dividers, findsNWidgets(2));
+    final brandIcon = find.descendant(
+      of: railFinder,
+      matching: find.byIcon(Icons.hub_rounded),
+    );
+    final firstNavigationIcon = find.descendant(
+      of: railFinder,
+      matching: find.byIcon(Icons.dashboard),
+    );
+    final separatorTop = tester.getTopLeft(dividers.first).dy;
+    expect(separatorTop, greaterThan(tester.getBottomLeft(brandIcon).dy));
+    expect(separatorTop, lessThan(tester.getTopLeft(firstNavigationIcon).dy));
     expect(find.byTooltip('Collapse sidebar'), findsOneWidget);
     final wideWidth = tester.getSize(find.byType(NavigationRail)).width;
     expect(wideWidth, 256, reason: 'The bottom toggle must not widen the rail');
@@ -29,6 +51,7 @@ void main() {
     await tester.tap(find.byTooltip('Collapse sidebar'));
     await tester.pumpAndSettle();
     expect(rail().extended, isFalse);
+    expect(brandText, findsNothing);
     expect(find.byTooltip('Expand sidebar'), findsOneWidget);
     expect(tester.getSize(find.byType(NavigationRail)).width, lessThan(100));
     final compactRailBottom = tester
@@ -43,7 +66,6 @@ void main() {
       lessThan(wideWidth),
     );
     // Collapsing labels must not remove the navigation icons.
-    final railFinder = find.byType(NavigationRail);
     expect(
       find.descendant(
         of: railFinder,
@@ -66,6 +88,7 @@ void main() {
     await tester.tap(find.byTooltip('Expand sidebar'));
     await tester.pumpAndSettle();
     expect(rail().extended, isTrue);
+    expect(brandText, findsOneWidget);
     expect(find.byTooltip('Collapse sidebar'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
@@ -122,6 +145,13 @@ void main() {
       isFalse,
     );
     expect(find.byTooltip('Expand sidebar'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(NavigationRail),
+        matching: find.text('MCP Manager'),
+      ),
+      findsNothing,
+    );
     expect(tester.takeException(), isNull);
   });
 }

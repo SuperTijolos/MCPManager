@@ -82,10 +82,7 @@ class _AppShellState extends ConsumerState<AppShell> {
             extended: expanded,
             selectedIndex: selected,
             onDestinationSelected: (i) => context.go(all[i].path),
-            leading: const Padding(
-              padding: EdgeInsets.symmetric(vertical: 12),
-              child: _Brand(),
-            ),
+            leading: _RailBrand(expanded: expanded),
             trailingAtBottom: true,
             trailing: _RailFooter(
               expanded: expanded,
@@ -145,6 +142,33 @@ class _AppShellState extends ConsumerState<AppShell> {
         ),
       ),
       body: widget.child,
+    );
+  }
+}
+
+/// Shows the full app name when expanded and marks the start of navigation.
+class _RailBrand extends StatelessWidget {
+  const _RailBrand({required this.expanded});
+
+  final bool expanded;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: expanded ? 256 : 80,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: EdgeInsets.fromLTRB(expanded ? 20 : 0, 16, 0, 16),
+            child: Align(
+              alignment: expanded ? Alignment.centerLeft : Alignment.center,
+              child: _Brand(extended: expanded),
+            ),
+          ),
+          const Divider(height: 1),
+        ],
+      ),
     );
   }
 }
