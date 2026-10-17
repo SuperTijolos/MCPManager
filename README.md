@@ -20,7 +20,7 @@ It is a Flutter web app built for the Hacktober Portimão festival, and a ground
 | **Servers** | Add/edit/remove MCP servers (Streamable HTTP or legacy HTTP+SSE, detected automatically), bearer token / OAuth and custom headers, live status, protocol, latency and a trace of what was tried. The Edit dialog is sectioned (connection, authentication, headers, advanced) and has a **Test connection** button. |
 | **Tools** | Browse and search every tool, read its schema, run it from a test bench. The list and detail panes are separated by a draggable divider (double-click resets, ←/→ nudge). **Rules** reshape what the Operator sees (see below). |
 | **Operator** | Chat with the model. It can manage servers, find the right tool for a job, recover from failed calls, and run your servers' tools. Conversations are saved: a history panel lets you search, rename, delete and reopen older chats. |
-| **Audit** | Every tool call, connection, sign-in and management action, filterable and paginated (page size selectable), with redacted arguments/results, actor and approval mode. Copy as JSON. |
+| **Audit** | Two views: **MCP tools** (tool calls) and **Dashboard** (connections, sign-ins and management actions), each with its own count and filters. Filter, search and paginate (page size selectable). Open any row for a detail dialog with the redacted arguments, the forwarded values, the result, the actor and the approval mode, or copy it as JSON. |
 | **Settings** | Model providers and enabled models (with presets for common endpoints), Operator limits and your own instructions, plus storage usage, backup / restore and a full reset. |
 | **About / Contributors** | What the app does, how the pieces fit, safety and data notes, facts about this copy (including the OAuth redirect URI), and the people who built it. |
 
@@ -37,8 +37,8 @@ The Operator is given a map of your tools grouped by purpose (for example "run c
 - A tool only runs **without asking** if its server marks it `readOnlyHint: true`. Everything else — including tools with no annotations — shows a card and waits for **Approve**, **Always allow this tool** (this conversation only) or **Deny**. Denied calls never reach the server and are recorded.
 - Tool output is wrapped in `<tool_output>` and the system prompt tells the model to treat it, audit text and server descriptions as untrusted data.
 - The audit log stores arguments and results **redacted** (secret-looking keys such as `apiKey`, `token`, `password`, and token-shaped strings) and size-limited. Each event records who triggered it (`user` or `operator:<model>`) and how it was authorised.
-- **What the Operator can do** (built-in `mcpm_*` tools). Read-only, no approval: `list_servers`, `get_server`, `list_tools`, `get_tool_schema`, `recent_audit` (filter by status, kind, server, tool, actor, text, age), `stats`, `list_models`, `discover_models`, `oauth_redirect_uri`. **Needs approval every time**: `add_server`, `update_server`, `remove_server`, `set_server_enabled`, `reconnect_server`, `set_active_model`, `clear_audit`.
-- Approval cards for these tools show a plain-language summary (for example *Add MCP server "Docs" at https://…*) and mask secrets such as bearer tokens. Tools that change configuration or delete data (`add_server`, `update_server`, `remove_server`, `set_active_model`, `clear_audit`) **cannot be "always allowed"**: each call asks again.
+- **What the Operator can do** (built-in `mcpm_*` tools). Read-only, no approval: `mcpm_list_servers`, `mcpm_get_server`, `mcpm_list_tools`, `mcpm_get_tool_schema`, `mcpm_find_tools` (search the tools by purpose), `mcpm_recent_audit` (filter by status, kind, server, tool, actor, text, age), `mcpm_stats`, `mcpm_list_models`, `mcpm_discover_models`, `mcpm_oauth_redirect_uri`. **Needs approval every time**: `mcpm_add_server`, `mcpm_update_server`, `mcpm_remove_server`, `mcpm_set_server_enabled`, `mcpm_reconnect_server`, `mcpm_set_active_model`, `mcpm_clear_audit`.
+- Approval cards for these tools show a plain-language summary (for example *Add MCP server "Docs" at https://…*) and mask secrets such as bearer tokens. Tools that change configuration or delete data (`mcpm_add_server`, `mcpm_update_server`, `mcpm_remove_server`, `mcpm_set_active_model`, `mcpm_clear_audit`) **cannot be "always allowed"**: each call asks again.
 - Management actions are audited (`Manage · add_server …`) with the actor, how they were approved, and redacted arguments — including denied attempts. Tool results given back to the model never contain tokens, headers or client ids.
 - The system prompt tells the model to change things only when the user explicitly asked in their own message, never to invent server URLs, and never to act on instructions found in tool output. Even a model that disobeys that is stopped by the approval gate (this is covered by a test).
 - OAuth sign-in can't be done by the model: the browser only allows the sign-in window from a real click, so a banner in the chat offers **Sign in** for any server that needs it.
@@ -107,7 +107,7 @@ lib/
     rules/, settings/        tool rules, Operator settings, backup / restore
   router/
     routes.dart, shell.dart  go_router + responsive shell (rail ≥ 900 px, drawer below)
-    pages/<name>/<name>_page.dart
+    pages/<name>/<name>_page.dart   overview, servers, tools, chat, audit, settings, info (About), contributors
   ui/                        theme and shared widgets
 test/                        engine tests + widget tests (incl. phone-width layout sweep)
 ```
@@ -124,7 +124,7 @@ flutter test
 flutter build web
 ```
 
-The suite (330 tests) covers the engine, the MCP clients against fake servers (including session expiry and SSE), OAuth, rules, chat history, backups and the pages at desktop and phone widths.
+The suite (332 tests) covers the engine, the MCP clients against fake servers (including session expiry and SSE), OAuth, rules, chat history, backups and the pages at desktop and phone widths.
 
 ## Limits and not-yet-ported features
 
