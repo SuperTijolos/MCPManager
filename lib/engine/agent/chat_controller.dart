@@ -168,6 +168,7 @@ class ChatState {
     this.running = false,
     this.conversations = const [],
     this.activeId,
+    this.autoApprove = false,
   });
 
   final List<ChatItem> items;
@@ -179,17 +180,22 @@ class ChatState {
   /// The open conversation; null until the first message of a new one.
   final String? activeId;
 
+  /// Whether tool calls run without asking in the open conversation.
+  final bool autoApprove;
+
   ChatState copyWith({
     List<ChatItem>? items,
     bool? running,
     List<ConversationMeta>? conversations,
     String? activeId,
     bool clearActive = false,
+    bool? autoApprove,
   }) => ChatState(
     items: items ?? this.items,
     running: running ?? this.running,
     conversations: conversations ?? this.conversations,
     activeId: clearActive ? null : activeId ?? this.activeId,
+    autoApprove: autoApprove ?? this.autoApprove,
   );
 }
 
@@ -247,7 +253,13 @@ class ChatController extends Notifier<ChatState> {
       if (consistent) break;
       _history.removeLast();
     }
-    return ChatState(items: items, conversations: conversations, activeId: id);
+    final meta = conversations.where((c) => c.id == id).firstOrNull;
+    return ChatState(
+      items: items,
+      conversations: conversations,
+      activeId: id,
+      autoApprove: meta?.autoApprove ?? false,
+    );
   }
 
   /// Saves the open conversation and updates the history list.
@@ -286,8 +298,13 @@ class ChatController extends Notifier<ChatState> {
                   ),
                   createdAt: now,
                   updatedAt: now,
+                  autoApprove: state.autoApprove,
                 ))
-            .copyWith(updatedAt: now, messageCount: prompts.length);
+            .copyWith(
+              updatedAt: now,
+              messageCount: prompts.length,
+              autoApprove: state.autoApprove,
+            );
     var list = [meta, ...state.conversations.where((c) => c.id != id)];
     // Keep the list bounded, dropping the least recently used conversations.
     while (list.length > maxConversations) {
@@ -299,13 +316,32 @@ class ChatController extends Notifier<ChatState> {
   }
 
   /// Starts a fresh, empty conversation. The current one stays in the history.
-  void newConversation() {
+  /// The new one keeps the approval mode you had selected, unless told otherwise.
+  void newConversation({bool? autoApprove}) {
     if (state.running) stop();
     _runToken++;
     _history.clear();
     _sessionAllowed.clear();
     _store.setActive(null);
-    state = ChatState(conversations: state.conversations);
+    state = ChatState(
+      conversations: state.conversations,
+      autoApprove: autoApprove ?? state.autoApprove,
+    );
+  }
+
+  /// Switches the open conversation between asking before tool calls and
+  /// running them automatically. The choice is saved with the conversation.
+  void setAutoApprove(bool value) {
+    if (value == state.autoApprove) return;
+    state = state.copyWith(autoApprove: value);
+    final id = state.activeId;
+    if (id == null) return;
+    final list = [
+      for (final c in state.conversations)
+        if (c.id == id) c.copyWith(autoApprove: value) else c,
+    ];
+    _store.saveIndex(list);
+    state = state.copyWith(conversations: list);
   }
 
   /// Switches to a saved conversation, stopping any run in progress.
@@ -402,6 +438,7 @@ class ChatController extends Notifier<ChatState> {
       requestApproval: _askApproval,
       isCancelled: () => _cancelled || token != _runToken,
       sessionAllowed: _sessionAllowed,
+      autoApprove: state.autoApprove,
       maxSteps: ref.read(appSettingsProvider).maxSteps,
       extraInstructions: ref.read(appSettingsProvider).extraInstructions,
     );

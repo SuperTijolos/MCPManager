@@ -69,6 +69,90 @@ List<ToolItem> _toolItems(ProviderContainer c) =>
 void main() {
   setUp(() => _deleteRuns = 0);
 
+  test('automatic mode runs an unannotated tool without asking and audits it as automatic', () async {
+    final llm = ScriptedLlm([
+      [_call('c1', 'Demo__delete_all')],
+      [const LlmTextDelta('Done.'), const LlmDone()],
+    ]);
+    final container = await _setup(llm);
+    final controller = container.read(chatControllerProvider.notifier);
+    controller.setAutoApprove(true);
+
+    await controller.send('clean up');
+
+    expect(_toolItems(container).single.status, ToolStatus.done);
+    expect(_deleteRuns, 1, reason: 'no approval was asked for');
+    final audit = container.read(auditLogProvider).single;
+    expect(audit.status, AuditStatus.success);
+    expect(audit.approval, 'automatic');
+  });
+
+  test(
+    'the approval mode is saved per conversation and new chats inherit it',
+    () async {
+      final llm = ScriptedLlm([
+        [const LlmTextDelta('one'), const LlmDone()],
+        [const LlmTextDelta('two'), const LlmDone()],
+      ]);
+      final container = await _setup(llm);
+      final controller = container.read(chatControllerProvider.notifier);
+
+      await controller.send('first');
+      final firstId = container.read(chatControllerProvider).activeId!;
+      expect(container.read(chatControllerProvider).autoApprove, isFalse);
+
+      controller.setAutoApprove(true);
+      expect(container.read(chatControllerProvider).autoApprove, isTrue);
+      final saved = container.read(chatControllerProvider).conversations;
+      expect(saved.single.autoApprove, isTrue);
+
+      controller.newConversation();
+      expect(
+        container.read(chatControllerProvider).autoApprove,
+        isTrue,
+        reason: 'a new chat keeps the mode you picked',
+      );
+      await controller.send('second');
+      final secondId = container.read(chatControllerProvider).activeId!;
+      controller.setAutoApprove(false);
+
+      controller.open(firstId);
+      expect(
+        container.read(chatControllerProvider).autoApprove,
+        isTrue,
+        reason: 'the first chat kept automatic mode',
+      );
+      controller.open(secondId);
+      expect(
+        container.read(chatControllerProvider).autoApprove,
+        isFalse,
+        reason: 'the second chat was switched to manual',
+      );
+    },
+  );
+
+  test(
+    'switching a chat back to manual asks again for later tool calls',
+    () async {
+      final llm = ScriptedLlm([
+        [_call('c1', 'Demo__delete_all')],
+        [const LlmTextDelta('Done.'), const LlmDone()],
+      ]);
+      final container = await _setup(llm);
+      final controller = container.read(chatControllerProvider.notifier);
+      controller.newConversation(autoApprove: true);
+      controller.setAutoApprove(false);
+
+      final run = controller.send('clean up');
+      await pumpEventQueue();
+      expect(_toolItems(container).single.status, ToolStatus.awaitingApproval);
+      expect(_deleteRuns, 0);
+      controller.decide('c1', ApprovalDecision.approveOnce);
+      await run;
+      expect(_deleteRuns, 1);
+    },
+  );
+
   test(
     'read-only tools run without approval and the answer streams back',
     () async {

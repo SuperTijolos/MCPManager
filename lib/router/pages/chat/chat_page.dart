@@ -92,7 +92,19 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       ),
       const _SignInBanner(),
       Padding(
-        padding: const EdgeInsets.fromLTRB(kPagePadding, 4, kPagePadding, 16),
+        padding: const EdgeInsets.fromLTRB(kPagePadding, 4, kPagePadding, 0),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 820),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: const _ApprovalToggle(),
+            ),
+          ),
+        ),
+      ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(kPagePadding, 8, kPagePadding, 16),
         child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 820),
@@ -198,6 +210,37 @@ class _ChatPageState extends ConsumerState<ChatPage> {
               ],
             )
           : _conversation(chat, settings),
+    );
+  }
+}
+
+/// Chooses, for the open conversation, whether tool calls wait for your
+/// approval or run automatically. New chats start with the last choice.
+class _ApprovalToggle extends ConsumerWidget {
+  const _ApprovalToggle();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final auto = ref.watch(chatControllerProvider.select((s) => s.autoApprove));
+    return SegmentedButton<bool>(
+      showSelectedIcon: false,
+      segments: const [
+        ButtonSegment(
+          value: false,
+          icon: Icon(Icons.front_hand_outlined),
+          label: Text('Ask first'),
+          tooltip: 'Each tool call waits for your approval',
+        ),
+        ButtonSegment(
+          value: true,
+          icon: Icon(Icons.bolt),
+          label: Text('Automatic'),
+          tooltip: 'Tool calls run in this chat without asking',
+        ),
+      ],
+      selected: {auto},
+      onSelectionChanged: (s) =>
+          ref.read(chatControllerProvider.notifier).setAutoApprove(s.first),
     );
   }
 }

@@ -53,7 +53,7 @@ class AuditEvent {
   final String? error;
 
   /// `auto` (read-only tool), `user` (approved), `session` (allowed for the
-  /// session) or `denied`. Null for actions that need no approval.
+  /// session), `automatic` (the chat runs tools without asking) or `denied`. Null for actions that need no approval.
   final String? approval;
 
   Json toJson() => {

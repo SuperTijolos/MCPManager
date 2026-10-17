@@ -19,6 +19,7 @@ class ConversationMeta {
     required this.createdAt,
     required this.updatedAt,
     this.messageCount = 0,
+    this.autoApprove = false,
   });
 
   final String id;
@@ -29,16 +30,22 @@ class ConversationMeta {
   /// Number of things you said (prompts), for a quick sense of size.
   final int messageCount;
 
+  /// When true, the Operator runs tool calls in this conversation without
+  /// asking. Off by default; each conversation keeps its own choice.
+  final bool autoApprove;
+
   ConversationMeta copyWith({
     String? title,
     DateTime? updatedAt,
     int? messageCount,
+    bool? autoApprove,
   }) => ConversationMeta(
     id: id,
     title: title ?? this.title,
     createdAt: createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
     messageCount: messageCount ?? this.messageCount,
+    autoApprove: autoApprove ?? this.autoApprove,
   );
 
   Json toJson() => {
@@ -47,6 +54,7 @@ class ConversationMeta {
     'createdAt': createdAt.toIso8601String(),
     'updatedAt': updatedAt.toIso8601String(),
     'messageCount': messageCount,
+    'autoApprove': autoApprove,
   };
 
   factory ConversationMeta.fromJson(Json json) => ConversationMeta(
@@ -55,6 +63,7 @@ class ConversationMeta {
     createdAt: DateTime.parse(json['createdAt'] as String),
     updatedAt: DateTime.parse(json['updatedAt'] as String),
     messageCount: json['messageCount'] as int? ?? 0,
+    autoApprove: json['autoApprove'] as bool? ?? false,
   );
 }
 

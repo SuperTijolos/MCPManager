@@ -85,7 +85,11 @@ class OperatorAgent {
     this.extraInstructions = '',
     this.capabilityMap = '',
     this.advisor,
+    this.autoApprove = false,
   });
+
+  /// Runs tool calls without asking, for conversations switched to automatic.
+  final bool autoApprove;
 
   final LlmProvider provider;
   final String model;
@@ -233,10 +237,16 @@ class OperatorAgent {
     }
 
     final needsApproval =
-        tool.requiresApproval && !sessionAllowed.contains(tool.name);
+        tool.requiresApproval &&
+        !autoApprove &&
+        !sessionAllowed.contains(tool.name);
     emit(AgentToolRequested(call, tool, needsApproval));
 
-    var approval = tool.requiresApproval ? 'session' : 'auto';
+    var approval = !tool.requiresApproval
+        ? 'auto'
+        : autoApprove
+        ? 'automatic'
+        : 'session';
     if (needsApproval) {
       final decision = await requestApproval(call, tool);
       if (decision == ApprovalDecision.deny || isCancelled()) {
