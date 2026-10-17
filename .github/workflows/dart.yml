@@ -18,6 +18,15 @@ jobs:
         with:
           channel: "stable"
 
+      - name: Create .env from secrets
+        env:
+          API_URL: ${{ secrets.API_URL }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASS: ${{ secrets.DB_PASS }}
+        run: |
+          printf "API_URL=%s\nDB_USER=%s\nDB_PASS=%s\n" "$API_URL" "$DB_USER" "$DB_PASS" > .env
+          chmod 600 .env
+
       - name: Install dependencies
         run: flutter pub get
 
