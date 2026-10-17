@@ -1,8 +1,10 @@
 # MCP Manager
 
-A control panel for [Model Context Protocol](https://modelcontextprotocol.io) servers, written in Flutter for the Hacktober Portimão festival. Connect MCP servers, inspect and test their tools, audit every call, and operate it all through a local LLM — **Gemma 4 via Ollama**, or any OpenAI-compatible endpoint.
+MCP Manager is a control panel for [Model Context Protocol](https://modelcontextprotocol.io) (MCP) servers, built in Flutter for the Hacktober Portimão festival. Connect your servers, inspect and test their tools, audit every call, and work with all of it through a local model: **Gemma 4 via Ollama**, or any OpenAI-compatible endpoint.
 
-This is a ground-up rewrite of the earlier Node/Next.js version (kept locally in `.old/`, not tracked).
+It is a ground-up rewrite of an earlier Node/Next.js version (kept locally in `.old/`, not tracked).
+
+**Credits.** Made in collaboration with Tomás Rodrigues, [GuikiPT](https://github.com/GuikiPT) and [AjaxR0](https://github.com/AjaxR0). Their names and GitHub profiles are also listed on the MLH team page for the project.
 
 ## What it does
 
