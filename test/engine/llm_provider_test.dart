@@ -151,6 +151,167 @@ void main() {
       },
     );
 
+    test(
+      'retries a thinking-only Ollama reply once without thinking',
+      () async {
+        final sent = <Map<String, dynamic>>[];
+        final provider = OllamaLlmProvider(
+          _ollama,
+          httpClient: MockClient.streaming((request, bodyStream) async {
+            final payload = (jsonDecode(
+              await bodyStream.bytesToString(),
+            ) as Map).cast<String, dynamic>();
+            sent.add(payload);
+            final response = sent.length == 1
+                ? _ndjson([
+                    {
+                      'model': 'qwen3.5:4b',
+                      'message': {
+                        'role': 'assistant',
+                        'thinking': 'Let me check',
+                      },
+                      'done': false,
+                    },
+                    {
+                      'model': 'qwen3.5:4b',
+                      'message': {'role': 'assistant', 'content': ''},
+                      'done': true,
+                      'done_reason': 'stop',
+                    },
+                  ])
+                : _ndjson([
+                    {
+                      'model': 'qwen3.5:4b',
+                      'message': {
+                        'role': 'assistant',
+                        'content': 'Here are the tools.',
+                      },
+                      'done': true,
+                      'done_reason': 'stop',
+                      'eval_count': 7,
+                    },
+                  ]);
+            return http.StreamedResponse(
+              Stream.value(utf8.encode(response)),
+              200,
+              headers: {'content-type': 'application/x-ndjson'},
+            );
+          }),
+        );
+        addTearDown(provider.close);
+
+        final events = await provider
+            .chat(
+              model: 'qwen3.5:4b',
+              messages: const [LlmMessage.user('list the available tools')],
+              tools: const [_weatherTool],
+            )
+            .toList();
+
+        expect(sent, hasLength(2));
+        expect(sent.first.containsKey('think'), isFalse);
+        expect(sent.last['think'], isFalse);
+        expect(
+          sent.last['messages'],
+          sent.first['messages'],
+          reason: 'retry the identical user request, not fake another turn',
+        );
+        expect(sent.last['tools'], sent.first['tools']);
+        expect(
+          events.whereType<LlmThinkingDelta>().single.text,
+          'Let me check',
+        );
+        expect(
+          events.whereType<LlmTextDelta>().single.text,
+          'Here are the tools.',
+        );
+        expect(events.whereType<LlmDone>(), hasLength(1));
+      },
+    );
+
+    test('thinking-only retry with no answer raises a visible error', () async {
+      var attempts = 0;
+      final provider = OllamaLlmProvider(
+        _ollama,
+        httpClient: MockClient.streaming((request, bodyStream) async {
+          attempts++;
+          final body = _ndjson([
+            {
+              'model': 'qwen3.5:4b',
+              'message': {
+                'role': 'assistant',
+                'thinking': 'Still considering this',
+              },
+              'done': true,
+              'done_reason': 'stop',
+            },
+          ]);
+          return http.StreamedResponse(
+            Stream.value(utf8.encode(body)),
+            200,
+            headers: {'content-type': 'application/x-ndjson'},
+          );
+        }),
+      );
+      addTearDown(provider.close);
+
+      await expectLater(
+        provider.chat(
+          model: 'qwen3.5:4b',
+          messages: const [LlmMessage.user('what tools exist?')],
+        ),
+        emitsInOrder([
+          isA<LlmThinkingDelta>(),
+          isA<LlmThinkingDelta>(),
+          emitsError(
+            isA<LlmException>().having(
+              (error) => error.message,
+              'message',
+              contains('no answer or tool call'),
+            ),
+          ),
+        ]),
+      );
+      expect(attempts, 2, reason: 'never spin on reasoning-only responses');
+    });
+
+    test(
+      'entirely empty Ollama reply is reported, not retried forever',
+      () async {
+        var attempts = 0;
+        final provider = OllamaLlmProvider(
+          _ollama,
+          httpClient: MockClient.streaming((request, bodyStream) async {
+            attempts++;
+            return http.StreamedResponse(
+              Stream.value(
+                utf8.encode(
+                  _ndjson([
+                    {
+                      'model': 'qwen3.5:4b',
+                      'message': {'role': 'assistant', 'content': ''},
+                      'done': true,
+                    },
+                  ]),
+                ),
+              ),
+              200,
+              headers: {'content-type': 'application/x-ndjson'},
+            );
+          }),
+        );
+        addTearDown(provider.close);
+        await expectLater(
+          provider.chat(
+            model: 'qwen3.5:4b',
+            messages: const [LlmMessage.user('hello')],
+          ),
+          emitsError(isA<LlmException>()),
+        );
+        expect(attempts, 1);
+      },
+    );
+
     test('listModels reports tool capability', () async {
       final provider = OllamaLlmProvider(
         _ollama,
@@ -383,7 +544,7 @@ void main() {
         final done = _ndjson([
           {
             'model': 'gemma4',
-            'message': {'role': 'assistant', 'content': ''},
+            'message': {'role': 'assistant', 'content': 'hello'},
             'done': true,
           },
         ]);

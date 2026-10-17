@@ -153,6 +153,40 @@ void main() {
     },
   );
 
+  test('thinking without a final answer produces a visible error', () async {
+    final llm = ScriptedLlm([
+      [
+        const LlmThinkingDelta('The user asks for a list of tools.'),
+        const LlmDone(),
+      ],
+      [const LlmTextDelta('Here are the tools.'), const LlmDone()],
+    ]);
+    final container = await _setup(llm);
+    final controller = container.read(chatControllerProvider.notifier);
+
+    await controller.send('list tools');
+    final failed = container.read(chatControllerProvider);
+    expect(failed.running, isFalse);
+    expect(
+      failed.items.whereType<ErrorItem>().single.message,
+      contains('without a reply or tool call'),
+    );
+    expect(
+      failed.items.whereType<AssistantItem>().last.thinking,
+      contains('The user asks'),
+    );
+
+    await controller.send('try again');
+    final recovered = container.read(chatControllerProvider);
+    expect(recovered.running, isFalse);
+    expect(
+      recovered.items.whereType<AssistantItem>().last.text,
+      'Here are the tools.',
+    );
+    // Never persist a blank assistant turn with no tool results.
+    expect(llm.received[1].where((m) => m.role == LlmRole.assistant), isEmpty);
+  });
+
   test(
     'read-only tools run without approval and the answer streams back',
     () async {

@@ -174,6 +174,15 @@ class OperatorAgent {
         }
       }
 
+      // A stream can finish after emitting only reasoning. Do not silently
+      // accept a blank final message as a completed Operator response.
+      if (calls.isEmpty && text.toString().trim().isEmpty) {
+        throw LlmException(
+          'The model finished without a reply or tool call. '
+          'Please retry or select another model.',
+        );
+      }
+
       history.add(
         LlmMessage.assistant(
           text.toString(),
