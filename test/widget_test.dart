@@ -5,6 +5,7 @@ import 'package:mcp_manager/engine/audit/audit_models.dart';
 import 'package:mcp_manager/engine/llm/llm_types.dart';
 import 'package:mcp_manager/engine/mcp/mcp_hub.dart';
 import 'package:mcp_manager/main.dart';
+import 'package:mcp_manager/router/pages/overview/overview_page.dart';
 
 import 'support/app_harness.dart';
 import 'support/fakes.dart';
@@ -55,6 +56,23 @@ void main() {
     // Gemma 4 on Ollama is configured by default.
     await tester.scrollUntilVisible(find.text('gemma4'), 240);
     expect(find.text('gemma4'), findsOneWidget);
+  });
+
+  testWidgets('Overview scrollbar stays outside cards', (tester) async {
+    await pumpApp(tester, size: const Size(1280, 650));
+    final overview = find.byType(OverviewPage);
+    final scrollbar = find.descendant(
+      of: overview,
+      matching: find.byType(Scrollbar),
+    );
+    expect(scrollbar, findsOneWidget);
+    final outcomesCard = find
+        .ancestor(of: find.text('Call outcomes'), matching: find.byType(Card))
+        .first;
+    final cardRight = tester.getTopRight(outcomesCard).dx;
+    final gutterRight = tester.getTopRight(scrollbar).dx;
+    expect(gutterRight - cardRight, greaterThanOrEqualTo(16));
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('Overview time selector updates analytics', (tester) async {

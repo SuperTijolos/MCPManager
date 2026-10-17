@@ -29,6 +29,14 @@ enum _Window {
 }
 
 class _OverviewPageState extends ConsumerState<OverviewPage> {
+  final _scrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
   _Window _window = _Window.day;
   bool _reconnecting = false;
 
@@ -85,179 +93,195 @@ class _OverviewPageState extends ConsumerState<OverviewPage> {
               : const Icon(Icons.refresh_rounded),
         ),
       ],
-      child: ListView(
-        children: [
-          if (hub.servers.isEmpty) ...[
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Wrap(
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  alignment: WrapAlignment.spaceBetween,
-                  spacing: 12,
-                  runSpacing: 8,
-                  children: [
-                    const Text('Start by connecting your first MCP server.'),
-                    FilledButton.icon(
-                      onPressed: () => context.go('/servers'),
-                      icon: const Icon(Icons.add),
-                      label: const Text('Add server'),
-                    ),
-                  ],
+      // Keep the scroll track in the page gutter, not over the rightmost card.
+      padded: false,
+      child: Scrollbar(
+        controller: _scrollController,
+        thumbVisibility: true,
+        thickness: 6,
+        radius: const Radius.circular(6),
+        child: ListView(
+          controller: _scrollController,
+          padding: const EdgeInsets.fromLTRB(
+            kPagePadding,
+            8,
+            kPagePadding + 18,
+            kPagePadding,
+          ),
+          children: [
+            if (hub.servers.isEmpty) ...[
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Wrap(
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    alignment: WrapAlignment.spaceBetween,
+                    spacing: 12,
+                    runSpacing: 8,
+                    children: [
+                      const Text('Start by connecting your first MCP server.'),
+                      FilledButton.icon(
+                        onPressed: () => context.go('/servers'),
+                        icon: const Icon(Icons.add),
+                        label: const Text('Add server'),
+                      ),
+                    ],
+                  ),
                 ),
               ),
+              const SizedBox(height: 16),
+            ],
+            if (attention.isNotEmpty) ...[
+              _AttentionCard(attention),
+              const SizedBox(height: 16),
+            ],
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final columns = constraints.maxWidth >= 1040
+                    ? 4
+                    : constraints.maxWidth >= 430
+                    ? 2
+                    : 1;
+                final width =
+                    (constraints.maxWidth - (columns - 1) * 12) / columns;
+                Widget tile(Widget widget) =>
+                    SizedBox(width: width, child: widget);
+                return Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  children: [
+                    tile(
+                      _StatCard(
+                        label: 'Servers online',
+                        value: '$connected/${enabled.length}',
+                        detail: enabled.isEmpty
+                            ? 'No enabled servers'
+                            : unavailable == 0
+                            ? 'All servers connected'
+                            : '$unavailable unavailable',
+                        icon: Icons.dns_outlined,
+                        color: enabled.isEmpty
+                            ? StatusColors.muted
+                            : unavailable == 0
+                            ? StatusColors.ok
+                            : StatusColors.warn,
+                        onTap: () => context.go('/servers'),
+                      ),
+                    ),
+                    tile(
+                      _StatCard(
+                        label: 'Available tools',
+                        value: '${hub.availableTools.length}',
+                        detail: 'From connected servers',
+                        icon: Icons.build_outlined,
+                        color: StatusColors.info,
+                        onTap: () => context.go('/tools'),
+                      ),
+                    ),
+                    tile(
+                      _StatCard(
+                        label: 'Tool calls · ${_window.label}',
+                        value: '${stats.total}',
+                        detail: stats.avgLatencyMs == null
+                            ? 'No response-time data'
+                            : 'Avg ${stats.avgLatencyMs}ms · p95 ${stats.p95LatencyMs}ms',
+                        icon: Icons.bolt_outlined,
+                        color: StatusColors.info,
+                        onTap: () => context.go('/audit'),
+                      ),
+                    ),
+                    tile(
+                      _StatCard(
+                        label: 'Failure rate · ${_window.label}',
+                        value: stats.total == 0
+                            ? '—'
+                            : '${(stats.errorRate * 100).toStringAsFixed(1)}%',
+                        detail:
+                            '${stats.error} errors · ${stats.denied} denied',
+                        icon: Icons.error_outline,
+                        color: stats.total == 0
+                            ? StatusColors.muted
+                            : stats.error == 0
+                            ? StatusColors.ok
+                            : StatusColors.bad,
+                        onTap: () => context.go('/audit'),
+                      ),
+                    ),
+                  ],
+                );
+              },
             ),
             const SizedBox(height: 16),
-          ],
-          if (attention.isNotEmpty) ...[
-            _AttentionCard(attention),
-            const SizedBox(height: 16),
-          ],
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final columns = constraints.maxWidth >= 1040
-                  ? 4
-                  : constraints.maxWidth >= 430
-                  ? 2
-                  : 1;
-              final width =
-                  (constraints.maxWidth - (columns - 1) * 12) / columns;
-              Widget tile(Widget widget) =>
-                  SizedBox(width: width, child: widget);
-              return Wrap(
-                spacing: 12,
-                runSpacing: 12,
-                children: [
-                  tile(
-                    _StatCard(
-                      label: 'Servers online',
-                      value: '$connected/${enabled.length}',
-                      detail: enabled.isEmpty
-                          ? 'No enabled servers'
-                          : unavailable == 0
-                          ? 'All servers connected'
-                          : '$unavailable unavailable',
-                      icon: Icons.dns_outlined,
-                      color: enabled.isEmpty
-                          ? StatusColors.muted
-                          : unavailable == 0
-                          ? StatusColors.ok
-                          : StatusColors.warn,
-                      onTap: () => context.go('/servers'),
-                    ),
-                  ),
-                  tile(
-                    _StatCard(
-                      label: 'Available tools',
-                      value: '${hub.availableTools.length}',
-                      detail: 'From connected servers',
-                      icon: Icons.build_outlined,
-                      color: StatusColors.info,
-                      onTap: () => context.go('/tools'),
-                    ),
-                  ),
-                  tile(
-                    _StatCard(
-                      label: 'Tool calls · ${_window.label}',
-                      value: '${stats.total}',
-                      detail: stats.avgLatencyMs == null
-                          ? 'No response-time data'
-                          : 'Avg ${stats.avgLatencyMs}ms · p95 ${stats.p95LatencyMs}ms',
-                      icon: Icons.bolt_outlined,
-                      color: StatusColors.info,
-                      onTap: () => context.go('/audit'),
-                    ),
-                  ),
-                  tile(
-                    _StatCard(
-                      label: 'Failure rate · ${_window.label}',
-                      value: stats.total == 0
-                          ? '—'
-                          : '${(stats.errorRate * 100).toStringAsFixed(1)}%',
-                      detail: '${stats.error} errors · ${stats.denied} denied',
-                      icon: Icons.error_outline,
-                      color: stats.total == 0
-                          ? StatusColors.muted
-                          : stats.error == 0
-                          ? StatusColors.ok
-                          : StatusColors.bad,
-                      onTap: () => context.go('/audit'),
-                    ),
-                  ),
-                ],
-              );
-            },
-          ),
-          const SizedBox(height: 16),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final chart = _ActivityPanel(
-                stats: stats,
-                window: _window,
-                onChange: (value) => setState(() => _window = value),
-              );
-              final outcome = _OutcomesPanel(stats);
-              return constraints.maxWidth >= 850
-                  ? Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(flex: 7, child: chart),
-                        const SizedBox(width: 16),
-                        Expanded(flex: 3, child: outcome),
-                      ],
-                    )
-                  : Column(
-                      children: [chart, const SizedBox(height: 16), outcome],
-                    );
-            },
-          ),
-          const SizedBox(height: 16),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final servers = _ServerHealthPanel(hub.servers);
-              final model = _ModelCard(settings: settings);
-              return constraints.maxWidth >= 850
-                  ? Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(flex: 7, child: servers),
-                        const SizedBox(width: 16),
-                        Expanded(flex: 3, child: model),
-                      ],
-                    )
-                  : Column(
-                      children: [servers, const SizedBox(height: 16), model],
-                    );
-            },
-          ),
-          const SizedBox(height: 16),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final recent = _RecentEvents(events.take(6).toList());
-              final tools = _TopTools(stats.topTools, window: _window.label);
-              return constraints.maxWidth >= 850
-                  ? Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(flex: 7, child: recent),
-                        const SizedBox(width: 16),
-                        Expanded(flex: 3, child: tools),
-                      ],
-                    )
-                  : Column(
-                      children: [recent, const SizedBox(height: 16), tools],
-                    );
-            },
-          ),
-          const SizedBox(height: 12),
-          Text(
-            'Statistics are based on locally retained audit records '
-            '(up to $auditCapacity events). Older history may be incomplete.',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final chart = _ActivityPanel(
+                  stats: stats,
+                  window: _window,
+                  onChange: (value) => setState(() => _window = value),
+                );
+                final outcome = _OutcomesPanel(stats);
+                return constraints.maxWidth >= 850
+                    ? Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(flex: 7, child: chart),
+                          const SizedBox(width: 16),
+                          Expanded(flex: 3, child: outcome),
+                        ],
+                      )
+                    : Column(
+                        children: [chart, const SizedBox(height: 16), outcome],
+                      );
+              },
             ),
-          ),
-        ],
+            const SizedBox(height: 16),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final servers = _ServerHealthPanel(hub.servers);
+                final model = _ModelCard(settings: settings);
+                return constraints.maxWidth >= 850
+                    ? Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(flex: 7, child: servers),
+                          const SizedBox(width: 16),
+                          Expanded(flex: 3, child: model),
+                        ],
+                      )
+                    : Column(
+                        children: [servers, const SizedBox(height: 16), model],
+                      );
+              },
+            ),
+            const SizedBox(height: 16),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final recent = _RecentEvents(events.take(6).toList());
+                final tools = _TopTools(stats.topTools, window: _window.label);
+                return constraints.maxWidth >= 850
+                    ? Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(flex: 7, child: recent),
+                          const SizedBox(width: 16),
+                          Expanded(flex: 3, child: tools),
+                        ],
+                      )
+                    : Column(
+                        children: [recent, const SizedBox(height: 16), tools],
+                      );
+              },
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Statistics are based on locally retained audit records '
+              '(up to $auditCapacity events). Older history may be incomplete.',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
