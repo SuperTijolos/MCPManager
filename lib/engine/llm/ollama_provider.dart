@@ -23,9 +23,9 @@ class OllamaLlmProvider implements LlmProvider {
            baseUrl: config.baseUrl,
            timeout: const Duration(minutes: 5),
            retryPolicy: retryPolicy,
-           authProvider: (config.apiKey ?? '').isEmpty
+           authProvider: config.bearerKey.isEmpty
                ? null
-               : o.BearerTokenProvider(config.apiKey!),
+               : o.BearerTokenProvider(config.bearerKey),
          ),
        );
 

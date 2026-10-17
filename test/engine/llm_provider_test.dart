@@ -489,6 +489,112 @@ void main() {
       },
     );
 
+    test('normalizes an accidentally pasted Bearer prefix', () async {
+      final provider = OpenAiLlmProvider(
+        _openai.copyWith(apiKey: '  Bearer sk-test  '),
+        httpClient: MockClient((request) async {
+          expect(request.headers['authorization'], 'Bearer sk-test');
+          return http.Response('{"data": []}', 200);
+        }),
+      );
+      expect(await provider.listModels(), isEmpty);
+    });
+
+    test(
+      'OpenRouter validates the key before publicly accessible models',
+      () async {
+        final paths = <String>[];
+        final provider = OpenAiLlmProvider(
+          _openai.copyWith(baseUrl: 'https://openrouter.ai/api/v1'),
+          httpClient: MockClient((request) async {
+            paths.add(request.url.path);
+            expect(request.headers['authorization'], 'Bearer sk-test');
+            if (request.url.path.endsWith('/key')) {
+              return http.Response('{"data": {"label": "test"}}', 200);
+            }
+            return http.Response('{"data": [{"id": "test-model"}]}', 200);
+          }),
+        );
+        expect((await provider.listModels()).single.name, 'test-model');
+        expect(paths, ['/api/v1/key', '/api/v1/models']);
+      },
+    );
+
+    test('OpenRouter rejects an invalid key before discovering models', () async {
+      final provider = OpenAiLlmProvider(
+        _openai.copyWith(baseUrl: 'https://openrouter.ai/api/v1'),
+        httpClient: MockClient((request) async {
+          expect(request.url.path, '/api/v1/key');
+          return http.Response(
+            '{"error":{"message":"Missing Authentication header","code":401}}',
+            401,
+          );
+        }),
+      );
+      await expectLater(
+        provider.listModels(),
+        throwsA(
+          isA<LlmException>().having(
+            (e) => e.message,
+            'message',
+            allOf(contains('401'), contains('Bearer header')),
+          ),
+        ),
+      );
+    });
+
+    test(
+      'OpenRouter missing key fails before sending network requests',
+      () async {
+        final provider = OpenAiLlmProvider(
+          _openai.copyWith(
+            baseUrl: 'https://openrouter.ai/api/v1',
+            clearApiKey: true,
+          ),
+          httpClient: MockClient((request) async {
+            fail('No request should be sent without an OpenRouter key');
+          }),
+        );
+        await expectLater(
+          provider.listModels(),
+          throwsA(
+            isA<LlmException>().having(
+              (e) => e.message,
+              'message',
+              contains('requires an API key'),
+            ),
+          ),
+        );
+      },
+    );
+
+    test(
+      'OpenRouter chat without a key fails before making requests',
+      () async {
+        final provider = OpenAiLlmProvider(
+          _openai.copyWith(
+            baseUrl: 'https://openrouter.ai/api/v1',
+            clearApiKey: true,
+          ),
+          httpClient: MockClient.streaming((request, bodyStream) async {
+            fail('No request should be sent without an OpenRouter key');
+          }),
+        );
+        await expectLater(
+          provider
+              .chat(model: 'm', messages: const [LlmMessage.user('hi')])
+              .toList(),
+          throwsA(
+            isA<LlmException>().having(
+              (e) => e.message,
+              'message',
+              contains('requires an API key'),
+            ),
+          ),
+        );
+      },
+    );
+
     test('HTTP errors carry the status', () async {
       final provider = OpenAiLlmProvider(
         _openai,

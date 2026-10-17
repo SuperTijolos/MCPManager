@@ -69,7 +69,7 @@ class _ProviderDialogState extends ConsumerState<ProviderDialog> {
   void _save() {
     if (!_form.currentState!.validate()) return;
     final existing = widget.existing;
-    final key = _key.text.trim();
+    final key = normalizeApiKey(_key.text);
     final url = normalizeBaseUrl(_url.text);
     final notifier = ref.read(llmSettingsProvider.notifier);
     final numCtx = _kind == ProviderKind.ollama
@@ -173,10 +173,15 @@ class _ProviderDialogState extends ConsumerState<ProviderDialog> {
                   autocorrect: false,
                   enableSuggestions: false,
                   decoration: InputDecoration(
-                    labelText: preset?.needsKey == true
+                    labelText:
+                        preset?.needsKey == true ||
+                            providerRequiresApiKey(
+                              _kind,
+                              normalizeBaseUrl(_url.text),
+                            )
                         ? 'API key'
                         : 'API key (optional)',
-                    helperText: 'Stored in this browser only.',
+                    helperText: 'Stored in this browser only. Paste a key with or without Bearer.',
                     suffixIcon: IconButton(
                       tooltip: _showKey ? 'Hide key' : 'Show key',
                       icon: Icon(
@@ -189,7 +194,12 @@ class _ProviderDialogState extends ConsumerState<ProviderDialog> {
                     ),
                   ),
                   validator: (v) =>
-                      preset?.needsKey == true && (v ?? '').trim().isEmpty
+                      (preset?.needsKey == true ||
+                              providerRequiresApiKey(
+                                _kind,
+                                normalizeBaseUrl(_url.text),
+                              )) &&
+                          normalizeApiKey(v).isEmpty
                       ? 'This service needs a key'
                       : null,
                 ),

@@ -1,5 +1,24 @@
 import '../core/json.dart';
 
+/// Accept a pasted raw key or `Bearer <key>` without sending `Bearer Bearer`.
+/// Do not change case or internal characters of the actual credential.
+String normalizeApiKey(String? value) {
+  var key = (value ?? '').trim();
+  if (key.toLowerCase().startsWith('bearer ')) {
+    key = key.substring(7).trim();
+  }
+  return key;
+}
+
+/// Public cloud APIs require credentials even when `/models` is anonymous.
+bool providerRequiresApiKey(ProviderKind kind, String url) {
+  final uri = Uri.tryParse(url);
+  final host = uri?.host.toLowerCase();
+  return host == 'api.openai.com' ||
+      host == 'openrouter.ai' ||
+      (kind == ProviderKind.ollama && host == 'ollama.com');
+}
+
 /// Ollama's own default window is too small for the Operator's tool list, so a
 /// provider without an explicit setting asks for this much.
 const defaultOllamaContext = 16384;
@@ -30,6 +49,9 @@ class ProviderConfig {
   /// Ollama: `http://host:11434`. OpenAI-compatible: `https://host/v1`.
   final String baseUrl;
   final String? apiKey;
+
+  /// Clean up existing saved keys as well as newly entered ones.
+  String get bearerKey => normalizeApiKey(apiKey);
 
   /// Models enabled for the chat picker. Newly discovered models stay off
   /// until the user turns them on.

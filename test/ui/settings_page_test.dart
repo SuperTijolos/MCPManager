@@ -175,6 +175,35 @@ void main() {
       expect(find.text('API key set'), findsOneWidget);
     });
 
+    testWidgets('hosted providers still require a key when edited', (
+      tester,
+    ) async {
+      final c = await _open(tester);
+      await tester.tap(find.text('Add provider'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('OpenRouter'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'API key'),
+        'Bearer sk-or-v1-test',
+      );
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      final added = c.read(llmSettingsProvider).providers.last;
+      expect(added.apiKey, 'sk-or-v1-test');
+
+      await tester.tap(find.byTooltip('Edit').last);
+      await tester.pumpAndSettle();
+      await tester.enterText(find.widgetWithText(TextFormField, 'API key'), '');
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      expect(find.text('This service needs a key'), findsOneWidget);
+      expect(
+        c.read(llmSettingsProvider).providers.last.apiKey,
+        'sk-or-v1-test',
+      );
+    });
+
     testWidgets('a local Ollama preset needs no key and brings gemma4', (
       tester,
     ) async {

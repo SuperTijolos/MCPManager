@@ -18,12 +18,51 @@ class OpenAiLlmProvider implements LlmProvider {
 
   Map<String, String> get _headers => {
     'content-type': 'application/json',
-    if ((config.apiKey ?? '').isNotEmpty)
-      'authorization': 'Bearer ${config.apiKey}',
+    if (config.bearerKey.isNotEmpty)
+      'authorization': 'Bearer ${config.bearerKey}',
   };
+
+  bool get _isOpenRouter =>
+      Uri.tryParse(config.baseUrl)?.host.toLowerCase() == 'openrouter.ai';
+
+  /// OpenRouter exposes `/models` without authentication, so a successful
+  /// model listing by itself does not confirm that the configured key works.
+  Future<void> _checkOpenRouterKey() async {
+    if (!_isOpenRouter) return;
+    if (config.bearerKey.isEmpty) {
+      throw LlmException(
+        'OpenRouter requires an API key. Edit this provider and add one.',
+      );
+    }
+    final http.Response response;
+    try {
+      response = await _http
+          .get(Uri.parse('${config.baseUrl}/key'), headers: _headers)
+          .timeout(const Duration(seconds: 15));
+    } catch (e) {
+      throw LlmException(_describe(e));
+    }
+    if (response.statusCode != 200) {
+      throw LlmException(_httpError(response.statusCode, response.body));
+    }
+  }
+
+  String _httpError(int status, String body) {
+    final details = truncate(body, 300);
+    if (status == 401) {
+      return config.bearerKey.isEmpty
+          ? 'HTTP 401: No API key is configured for ${config.baseUrl}. $details'
+          : 'HTTP 401: ${config.baseUrl} rejected authentication. '
+                'The app configured a Bearer header, but the service did not accept it. '
+                'Check that the key belongs to this provider, is valid, and that '
+                'no redirect or proxy strips Authorization. $details';
+    }
+    return 'HTTP $status: $details';
+  }
 
   @override
   Future<List<LlmModel>> listModels() async {
+    await _checkOpenRouterKey();
     final http.Response response;
     try {
       response = await _http
@@ -33,9 +72,7 @@ class OpenAiLlmProvider implements LlmProvider {
       throw LlmException(_describe(e));
     }
     if (response.statusCode != 200) {
-      throw LlmException(
-        'HTTP ${response.statusCode}: ${truncate(response.body, 300)}',
-      );
+      throw LlmException(_httpError(response.statusCode, response.body));
     }
     final decoded = jsonDecode(response.body);
     final data = decoded is Map ? decoded['data'] : null;
@@ -51,6 +88,11 @@ class OpenAiLlmProvider implements LlmProvider {
     required List<LlmMessage> messages,
     List<LlmToolSpec> tools = const [],
   }) async* {
+    if (_isOpenRouter && config.bearerKey.isEmpty) {
+      throw LlmException(
+        'OpenRouter requires an API key. Edit this provider and add one.',
+      );
+    }
     final request =
         http.Request('POST', Uri.parse('${config.baseUrl}/chat/completions'))
           ..headers.addAll({..._headers, 'accept': 'text/event-stream'})
@@ -81,7 +123,7 @@ class OpenAiLlmProvider implements LlmProvider {
     }
     if (response.statusCode != 200) {
       final body = await response.stream.bytesToString();
-      throw LlmException('HTTP ${response.statusCode}: ${truncate(body, 400)}');
+      throw LlmException(_httpError(response.statusCode, body));
     }
 
     final partial = <int, _PartialCall>{};
