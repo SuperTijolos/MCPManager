@@ -143,7 +143,7 @@ void main() {
       (tester) async {
         final c = await pumpApp(tester);
         await goTo(tester, '/audit');
-        expect(find.text('No events yet'), findsOneWidget);
+        expect(find.text('No tool calls yet'), findsOneWidget);
         expect(find.byTooltip('Next page'), findsNothing);
 
         seed(c, 3);
@@ -181,12 +181,59 @@ void main() {
         );
         await tester.tap(find.text('Docs · lookup'));
         await tester.pumpAndSettle();
+        expect(find.byType(Dialog), findsOneWidget, reason: 'opens the detail');
         expect(find.text('Arguments from the model'), findsOneWidget);
         expect(find.text('Forwarded to the server'), findsOneWidget);
         expect(find.textContaining('Audit-only context'), findsOneWidget);
         expect(find.text('reshaped by rules'), findsOneWidget);
+        expect(find.text('Result'), findsOneWidget);
       },
     );
+
+    testWidgets('MCP tool calls and dashboard activity are separate views', (
+      tester,
+    ) async {
+      final c = await pumpApp(tester);
+      final log = c.read(auditLogProvider.notifier);
+      seed(c, 4);
+      log.record(
+        kind: AuditKind.serverConnect,
+        status: AuditStatus.success,
+        source: AuditSource.system,
+        actor: 'user',
+        serverName: 'Docs',
+      );
+      log.record(
+        kind: AuditKind.manage,
+        status: AuditStatus.success,
+        source: AuditSource.operator,
+        actor: 'operator:gemma4',
+        toolName: 'add_server',
+      );
+      await goTo(tester, '/audit');
+
+      expect(find.text('MCP tools (4)'), findsOneWidget);
+      expect(find.text('Dashboard (2)'), findsOneWidget);
+      expect(find.text('1–4 of 4'), findsOneWidget, reason: 'tools by default');
+      expect(find.textContaining('Connect Docs'), findsNothing);
+
+      await tester.tap(find.text('Dashboard (2)'));
+      await tester.pumpAndSettle();
+      expect(find.text('1–2 of 2'), findsOneWidget);
+      expect(find.textContaining('tool_1'), findsNothing);
+      expect(find.text('Connect Docs'), findsOneWidget);
+      expect(find.text('Manage · add_server'), findsOneWidget);
+    });
+
+    testWidgets('an empty dashboard view explains what belongs there', (
+      tester,
+    ) async {
+      await pumpApp(tester);
+      await goTo(tester, '/audit');
+      await tester.tap(find.text('Dashboard (0)'));
+      await tester.pumpAndSettle();
+      expect(find.text('No dashboard activity yet'), findsOneWidget);
+    });
 
     test('the log keeps up to a thousand events', () {
       expect(auditCapacity, 1000);
