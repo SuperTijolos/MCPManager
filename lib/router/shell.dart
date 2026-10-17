@@ -1,35 +1,74 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../engine/core/prefs.dart';
 import '../ui/theme.dart';
 import 'routes.dart';
 
-/// Responsive frame: a navigation rail on wide screens, a drawer on narrow ones.
-class AppShell extends ConsumerWidget {
+/// Persists an explicit choice while still defaulting to the screen-width layout.
+const _railExpandedKey = 'mcpm.navigation.rail.expanded.v1';
+
+/// Responsive frame: a collapsible rail on desktop, a drawer on phones.
+class AppShell extends ConsumerStatefulWidget {
   const AppShell({super.key, required this.location, required this.child});
 
   final String location;
   final Widget child;
 
+  @override
+  ConsumerState<AppShell> createState() => _AppShellState();
+}
+
+class _AppShellState extends ConsumerState<AppShell> {
+  bool? _expandedPreference;
+
+  @override
+  void initState() {
+    super.initState();
+    _expandedPreference = ref
+        .read(sharedPreferencesProvider)
+        .getBool(_railExpandedKey);
+  }
+
+  void _toggleRail(bool currentlyExpanded) {
+    final expanded = !currentlyExpanded;
+    setState(() => _expandedPreference = expanded);
+    unawaited(
+      ref.read(sharedPreferencesProvider).setBool(_railExpandedKey, expanded),
+    );
+  }
+
   int get _mainIndex {
     for (var i = 0; i < mainDestinations.length; i++) {
       final path = mainDestinations[i].path;
-      if (path == '/' ? location == '/' : location.startsWith(path)) return i;
+      if (path == '/'
+          ? widget.location == '/'
+          : widget.location.startsWith(path)) {
+        return i;
+      }
     }
     return -1;
   }
 
-  int get _secondaryIndex =>
-      secondaryDestinations.indexWhere((d) => location.startsWith(d.path));
+  int get _secondaryIndex => secondaryDestinations.indexWhere(
+    (d) => widget.location.startsWith(d.path),
+  );
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final wide = MediaQuery.sizeOf(context).width >= kWideBreakpoint;
-    return wide ? _wideLayout(context) : _narrowLayout(context);
+  Widget build(BuildContext context) {
+    final width = MediaQuery.sizeOf(context).width;
+    if (width < kWideBreakpoint) {
+      return _narrowLayout(context);
+    }
+    // Preserve tablet's icon-only rail as the default at intermediate widths.
+    final expanded = _expandedPreference ?? width >= 1200;
+    return _wideLayout(context, expanded: expanded);
   }
 
-  Widget _wideLayout(BuildContext context) {
+  Widget _wideLayout(BuildContext context, {required bool expanded}) {
     final all = [...mainDestinations, ...secondaryDestinations];
     final selected = _mainIndex >= 0
         ? _mainIndex
@@ -40,12 +79,17 @@ class AppShell extends ConsumerWidget {
       body: Row(
         children: [
           NavigationRail(
-            extended: MediaQuery.sizeOf(context).width >= 1200,
+            extended: expanded,
             selectedIndex: selected,
             onDestinationSelected: (i) => context.go(all[i].path),
             leading: const Padding(
               padding: EdgeInsets.symmetric(vertical: 12),
               child: _Brand(),
+            ),
+            trailingAtBottom: true,
+            trailing: _RailFooter(
+              expanded: expanded,
+              onToggle: () => _toggleRail(expanded),
             ),
             destinations: [
               for (final d in all)
@@ -57,7 +101,7 @@ class AppShell extends ConsumerWidget {
             ],
           ),
           const VerticalDivider(width: 1),
-          Expanded(child: child),
+          Expanded(child: widget.child),
         ],
       ),
     );
@@ -66,7 +110,9 @@ class AppShell extends ConsumerWidget {
   Widget _narrowLayout(BuildContext context) {
     final all = [...mainDestinations, ...secondaryDestinations];
     final current = all.where(
-      (d) => d.path == '/' ? location == '/' : location.startsWith(d.path),
+      (d) => d.path == '/'
+          ? widget.location == '/'
+          : widget.location.startsWith(d.path),
     );
     return Scaffold(
       appBar: AppBar(
@@ -98,7 +144,46 @@ class AppShell extends ConsumerWidget {
           ),
         ),
       ),
-      body: child,
+      body: widget.child,
+    );
+  }
+}
+
+/// Keep the collapse action at the bottom, separate from navigation items.
+/// The footer never affects the rail's standard 256/80px widths.
+class _RailFooter extends StatelessWidget {
+  const _RailFooter({required this.expanded, required this.onToggle});
+
+  final bool expanded;
+  final VoidCallback onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: expanded ? 256 : 80,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Divider(height: 1),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Align(
+              alignment: expanded ? Alignment.centerRight : Alignment.center,
+              child: IconButton(
+                tooltip: expanded ? 'Collapse sidebar' : 'Expand sidebar',
+                onPressed: onToggle,
+                icon: Icon(
+                  expanded
+                      ? Icons.chevron_left_rounded
+                      : Icons.chevron_right_rounded,
+                ),
+                iconSize: 22,
+                visualDensity: VisualDensity.compact,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
