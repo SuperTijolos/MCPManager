@@ -193,15 +193,20 @@ class _ProviderDialogState extends ConsumerState<ProviderDialog> {
                       onPressed: () => setState(() => _showKey = !_showKey),
                     ),
                   ),
-                  validator: (v) =>
-                      (preset?.needsKey == true ||
-                              providerRequiresApiKey(
-                                _kind,
-                                normalizeBaseUrl(_url.text),
-                              )) &&
-                          normalizeApiKey(v).isEmpty
-                      ? 'This service needs a key'
-                      : null,
+                  validator: (v) {
+                    final url = normalizeBaseUrl(_url.text);
+                    if (_kind == ProviderKind.openaiCompatible &&
+                        Uri.tryParse(url)?.host.toLowerCase() ==
+                            'openrouter.ai' &&
+                        normalizeApiKey(v).isNotEmpty) {
+                      return openRouterKeyProblem(v);
+                    }
+                    return (preset?.needsKey == true ||
+                                providerRequiresApiKey(_kind, url)) &&
+                            normalizeApiKey(v).isEmpty
+                        ? 'This service needs a key'
+                        : null;
+                  },
                 ),
                 if (_kind == ProviderKind.ollama) ...[
                   const SizedBox(height: 12),

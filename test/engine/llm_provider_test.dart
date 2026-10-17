@@ -500,15 +500,63 @@ void main() {
       expect(await provider.listModels(), isEmpty);
     });
 
+    test('normalizes quoted and repeated bearer prefixes', () {
+      expect(
+        normalizeApiKey(' "Bearer Bearer sk-or-v1-fakevalue" '),
+        'sk-or-v1-fakevalue',
+      );
+      expect(
+        normalizeApiKey("'Bearer sk-or-v1-fakevalue'"),
+        'sk-or-v1-fakevalue',
+      );
+      expect(openRouterKeyProblem('Bearer sk-or-v1-fakevalue'), isNull);
+      expect(
+        openRouterKeyProblem('Bearer sk-test'),
+        contains('OpenRouter keys start with'),
+      );
+      expect(
+        openRouterKeyProblem('sk-or-v1-ab c'),
+        contains('Invalid OpenRouter API key format'),
+      );
+    });
+
+    test(
+      'OpenRouter rejects malformed keys locally before a network call',
+      () async {
+        final provider = OpenAiLlmProvider(
+          _openai.copyWith(
+            baseUrl: 'https://openrouter.ai/api/v1',
+            apiKey: 'Bearer sk-test',
+          ),
+          httpClient: MockClient((request) async {
+            fail('Invalid credentials must not reach the network');
+          }),
+        );
+        await expectLater(
+          provider.listModels(),
+          throwsA(
+            isA<LlmException>().having(
+              (e) => e.message,
+              'message',
+              contains('not an OpenRouter API key'),
+            ),
+          ),
+        );
+      },
+    );
+
     test(
       'OpenRouter validates the key before publicly accessible models',
       () async {
         final paths = <String>[];
         final provider = OpenAiLlmProvider(
-          _openai.copyWith(baseUrl: 'https://openrouter.ai/api/v1'),
+          _openai.copyWith(
+            baseUrl: 'https://openrouter.ai/api/v1',
+            apiKey: 'sk-or-v1-test',
+          ),
           httpClient: MockClient((request) async {
             paths.add(request.url.path);
-            expect(request.headers['authorization'], 'Bearer sk-test');
+            expect(request.headers['authorization'], 'Bearer sk-or-v1-test');
             if (request.url.path.endsWith('/key')) {
               return http.Response('{"data": {"label": "test"}}', 200);
             }
@@ -522,7 +570,10 @@ void main() {
 
     test('OpenRouter rejects an invalid key before discovering models', () async {
       final provider = OpenAiLlmProvider(
-        _openai.copyWith(baseUrl: 'https://openrouter.ai/api/v1'),
+        _openai.copyWith(
+          baseUrl: 'https://openrouter.ai/api/v1',
+          apiKey: 'sk-or-v1-test',
+        ),
         httpClient: MockClient((request) async {
           expect(request.url.path, '/api/v1/key');
           return http.Response(
@@ -537,7 +588,7 @@ void main() {
           isA<LlmException>().having(
             (e) => e.message,
             'message',
-            allOf(contains('401'), contains('Bearer header')),
+            allOf(contains('401'), contains('Authorization: Bearer')),
           ),
         ),
       );

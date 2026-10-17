@@ -1,13 +1,39 @@
 import '../core/json.dart';
 
-/// Accept a pasted raw key or `Bearer <key>` without sending `Bearer Bearer`.
-/// Do not change case or internal characters of the actual credential.
+/// Accept raw credentials, quoted credentials, or Bearer-prefixed values.
+/// Users sometimes paste the whole header, twice. Never include the prefix
+/// more than once in an outgoing Authorization header.
 String normalizeApiKey(String? value) {
   var key = (value ?? '').trim();
-  if (key.toLowerCase().startsWith('bearer ')) {
-    key = key.substring(7).trim();
+  for (var i = 0; i < 4; i++) {
+    if (key.length >= 2 &&
+        ((key.startsWith('"') && key.endsWith('"')) ||
+            (key.startsWith("'") && key.endsWith("'")))) {
+      key = key.substring(1, key.length - 1).trim();
+      continue;
+    }
+    final bearer = RegExp(r'^Bearer\s+', caseSensitive: false).firstMatch(key);
+    if (bearer == null) break;
+    key = key.substring(bearer.end).trim();
   }
   return key;
+}
+
+/// OpenRouter rejects malformed Bearer tokens with a misleading 401 error:
+/// "Missing Authentication header", even if a header was sent. Validate the
+/// documented key prefix locally without exposing or transmitting the value.
+String? openRouterKeyProblem(String? value) {
+  final key = normalizeApiKey(value);
+  if (key.isEmpty) return 'OpenRouter requires an API key.';
+  if (!key.startsWith('sk-or-v1-')) {
+    return 'This is not an OpenRouter API key. OpenRouter keys start with '
+        'sk-or-v1-. Copy one from your OpenRouter Keys page.';
+  }
+  if (!RegExp(r'^sk-or-v1-[A-Za-z0-9_-]+$').hasMatch(key)) {
+    return 'Invalid OpenRouter API key format. Paste the raw key, without '
+        'quotes, spaces, or any extra text.';
+  }
+  return null;
 }
 
 /// Public cloud APIs require credentials even when `/models` is anonymous.

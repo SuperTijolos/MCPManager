@@ -29,11 +29,8 @@ class OpenAiLlmProvider implements LlmProvider {
   /// model listing by itself does not confirm that the configured key works.
   Future<void> _checkOpenRouterKey() async {
     if (!_isOpenRouter) return;
-    if (config.bearerKey.isEmpty) {
-      throw LlmException(
-        'OpenRouter requires an API key. Edit this provider and add one.',
-      );
-    }
+    final problem = openRouterKeyProblem(config.apiKey);
+    if (problem != null) throw LlmException(problem);
     final http.Response response;
     try {
       response = await _http
@@ -52,10 +49,11 @@ class OpenAiLlmProvider implements LlmProvider {
     if (status == 401) {
       return config.bearerKey.isEmpty
           ? 'HTTP 401: No API key is configured for ${config.baseUrl}. $details'
-          : 'HTTP 401: ${config.baseUrl} rejected authentication. '
-                'The app configured a Bearer header, but the service did not accept it. '
-                'Check that the key belongs to this provider, is valid, and that '
-                'no redirect or proxy strips Authorization. $details';
+          : 'HTTP 401: Authentication rejected by ${config.baseUrl}. '
+                'The app built an Authorization: Bearer header, but the '
+                'response does not prove whether it reached the server. '
+                'Check your API key, or inspect the browser Network request '
+                '(do not share the header value). $details';
     }
     return 'HTTP $status: $details';
   }
@@ -88,10 +86,9 @@ class OpenAiLlmProvider implements LlmProvider {
     required List<LlmMessage> messages,
     List<LlmToolSpec> tools = const [],
   }) async* {
-    if (_isOpenRouter && config.bearerKey.isEmpty) {
-      throw LlmException(
-        'OpenRouter requires an API key. Edit this provider and add one.',
-      );
+    if (_isOpenRouter) {
+      final problem = openRouterKeyProblem(config.apiKey);
+      if (problem != null) throw LlmException(problem);
     }
     final request =
         http.Request('POST', Uri.parse('${config.baseUrl}/chat/completions'))

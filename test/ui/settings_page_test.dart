@@ -163,7 +163,7 @@ void main() {
       expect(find.text('This service needs a key'), findsOneWidget);
       await tester.enterText(
         find.widgetWithText(TextFormField, 'API key'),
-        'sk-or-123',
+        'sk-or-v1-test',
       );
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
@@ -171,8 +171,26 @@ void main() {
       final added = c.read(llmSettingsProvider).providers.last;
       expect(added.name, 'OpenRouter');
       expect(added.baseUrl, 'https://openrouter.ai/api/v1');
-      expect(added.apiKey, 'sk-or-123');
+      expect(added.apiKey, 'sk-or-v1-test');
       expect(find.text('API key set'), findsOneWidget);
+    });
+
+    testWidgets('OpenRouter rejects a key from the wrong service', (
+      tester,
+    ) async {
+      final c = await _open(tester);
+      await tester.tap(find.text('Add provider'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('OpenRouter'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'API key'),
+        'sk-test-from-another-provider',
+      );
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('OpenRouter keys start with'), findsOneWidget);
+      expect(c.read(llmSettingsProvider).providers.length, 1);
     });
 
     testWidgets('hosted providers still require a key when edited', (
