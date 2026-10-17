@@ -9,6 +9,9 @@ class McpServerConfig {
     required this.url,
     this.headers = const {},
     this.enabled = true,
+    this.oauth = false,
+    this.oauthClientId,
+    this.oauthScope,
   });
 
   final String id;
@@ -21,17 +24,37 @@ class McpServerConfig {
   final Map<String, String> headers;
   final bool enabled;
 
+  /// Sign in with OAuth (MCP authorization) instead of a static token.
+  final bool oauth;
+
+  /// Pre-registered client id, for servers without dynamic client registration.
+  final String? oauthClientId;
+  final String? oauthScope;
+
+  /// A manually configured `Authorization` header (bearer-token mode).
+  bool get hasStaticAuthorization =>
+      headers.keys.any((k) => k.toLowerCase() == 'authorization');
+
   McpServerConfig copyWith({
     String? name,
     String? url,
     Map<String, String>? headers,
     bool? enabled,
+    bool? oauth,
+    String? oauthClientId,
+    String? oauthScope,
+    bool clearOAuthOptions = false,
   }) => McpServerConfig(
     id: id,
     name: name ?? this.name,
     url: url ?? this.url,
     headers: headers ?? this.headers,
     enabled: enabled ?? this.enabled,
+    oauth: oauth ?? this.oauth,
+    oauthClientId: clearOAuthOptions
+        ? null
+        : oauthClientId ?? this.oauthClientId,
+    oauthScope: clearOAuthOptions ? null : oauthScope ?? this.oauthScope,
   );
 
   Json toJson() => {
@@ -40,6 +63,9 @@ class McpServerConfig {
     'url': url,
     'headers': headers,
     'enabled': enabled,
+    'oauth': oauth,
+    'oauthClientId': ?oauthClientId,
+    'oauthScope': ?oauthScope,
   };
 
   factory McpServerConfig.fromJson(Json json) => McpServerConfig(
@@ -50,6 +76,9 @@ class McpServerConfig {
       (k, v) => MapEntry('$k', '$v'),
     ),
     enabled: json['enabled'] as bool? ?? true,
+    oauth: json['oauth'] as bool? ?? false,
+    oauthClientId: json['oauthClientId'] as String?,
+    oauthScope: json['oauthScope'] as String?,
   );
 }
 
@@ -165,4 +194,12 @@ class McpException implements Exception {
 
   @override
   String toString() => message;
+}
+
+/// The server answered 401: it needs (new) credentials.
+class McpAuthRequired extends McpException {
+  McpAuthRequired(super.message, {this.wwwAuthenticate}) : super(code: 401);
+
+  /// Raw `WWW-Authenticate` header, when the browser let us read it.
+  final String? wwwAuthenticate;
 }

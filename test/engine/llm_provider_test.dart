@@ -132,6 +132,11 @@ void main() {
         expect((done.promptTokens, done.completionTokens), (12, 7));
 
         expect(sent['model'], 'gemma4');
+        expect(
+          (sent['options'] as Map)['num_ctx'],
+          defaultOllamaContext,
+          reason: "an unset context window must not fall back to Ollama's small default",
+        );
         final tools = sent['tools'] as List;
         expect((tools.single as Map)['function']['name'], 'weather__forecast');
         final messages = (sent['messages'] as List).cast<Map>();
@@ -365,5 +370,29 @@ void main() {
       );
       expect((await provider.listModels()).map((m) => m.name), ['a', 'b']);
     });
+  });
+
+  test('an explicit context window is sent to Ollama', () async {
+    late Map<String, dynamic> sent;
+    final provider = OllamaLlmProvider(
+      _ollama.copyWith(contextLength: 8192),
+      httpClient: MockClient.streaming((request, bodyStream) async {
+        sent = jsonDecode(
+          await bodyStream.bytesToString(),
+        ) as Map<String, dynamic>;
+        final done = _ndjson([
+          {
+            'model': 'gemma4',
+            'message': {'role': 'assistant', 'content': ''},
+            'done': true,
+          },
+        ]);
+        return http.StreamedResponse(Stream.value(utf8.encode(done)), 200);
+      }),
+    );
+    await provider
+        .chat(model: 'gemma4', messages: const [LlmMessage.user('hi')])
+        .toList();
+    expect((sent['options'] as Map)['num_ctx'], 8192);
   });
 }

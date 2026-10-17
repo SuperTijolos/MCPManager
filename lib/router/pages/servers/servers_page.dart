@@ -6,6 +6,8 @@ import '../../../engine/core/url.dart';
 import '../../../engine/mcp/headers.dart';
 import '../../../engine/mcp/mcp_hub.dart';
 import '../../../engine/mcp/mcp_models.dart';
+import '../../../engine/mcp/oauth/oauth_service.dart';
+import '../../../ui/sign_in.dart';
 import '../../../ui/theme.dart';
 import '../../../ui/widgets.dart';
 
@@ -105,6 +107,11 @@ class _ServerCard extends ConsumerWidget {
       Icons.check_circle_outline,
     ),
     ServerStatus.connecting => ('Connecting', StatusColors.info, Icons.sync),
+    ServerStatus.needsAuth => (
+      'Sign-in required',
+      StatusColors.warn,
+      Icons.lock_outline,
+    ),
     ServerStatus.error => ('Error', StatusColors.bad, Icons.error_outline),
     ServerStatus.disabled => (
       'Disabled',
@@ -144,7 +151,18 @@ class _ServerCard extends ConsumerWidget {
                     ],
                   ),
                 ),
-                StatusChip(label, color, icon: icon),
+                Wrap(
+                  spacing: 6,
+                  children: [
+                    if (config.oauth)
+                      const StatusChip(
+                        'OAuth',
+                        StatusColors.info,
+                        icon: Icons.vpn_key_outlined,
+                      ),
+                    StatusChip(label, color, icon: icon),
+                  ],
+                ),
               ],
             ),
             const SizedBox(height: 10),
@@ -172,7 +190,11 @@ class _ServerCard extends ConsumerWidget {
                 width: double.infinity,
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: StatusColors.bad.withValues(alpha: 0.1),
+                  color:
+                      (runtime.status == ServerStatus.needsAuth
+                              ? StatusColors.warn
+                              : StatusColors.bad)
+                          .withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: SelectableText(
@@ -194,6 +216,20 @@ class _ServerCard extends ConsumerWidget {
                     alignment: WrapAlignment.end,
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
+                      if (runtime.status == ServerStatus.needsAuth)
+                        FilledButton.tonalIcon(
+                          onPressed: () =>
+                              signInToServer(context, ref, config.id),
+                          icon: const Icon(Icons.login, size: 18),
+                          label: const Text('Sign in'),
+                        ),
+                      if (config.oauth &&
+                          runtime.status == ServerStatus.connected)
+                        TextButton.icon(
+                          onPressed: () => hub.signOut(config.id),
+                          icon: const Icon(Icons.logout, size: 18),
+                          label: const Text('Sign out'),
+                        ),
                       if (runtime.tools.isNotEmpty)
                         TextButton.icon(
                           onPressed: () => context.go('/tools'),
@@ -297,12 +333,17 @@ class _ServerDialog extends ConsumerStatefulWidget {
   ConsumerState<_ServerDialog> createState() => _ServerDialogState();
 }
 
+enum _AuthMode { none, bearer, oauth }
+
 class _ServerDialogState extends ConsumerState<_ServerDialog> {
   final _form = GlobalKey<FormState>();
   late final TextEditingController _name;
   late final TextEditingController _url;
   late final TextEditingController _token;
   late final TextEditingController _headers;
+  late final TextEditingController _clientId;
+  late final TextEditingController _scope;
+  late _AuthMode _mode;
   bool _saving = false;
 
   @override
@@ -318,10 +359,19 @@ class _ServerDialogState extends ConsumerState<_ServerDialog> {
       token = auth.value.substring(7);
       headers.remove(auth.key);
     }
+    _mode = c == null
+        ? _AuthMode.none
+        : c.oauth
+        ? _AuthMode.oauth
+        : token.isNotEmpty
+        ? _AuthMode.bearer
+        : _AuthMode.none;
     _name = TextEditingController(text: c?.name ?? '');
     _url = TextEditingController(text: c?.url ?? '');
     _token = TextEditingController(text: token);
     _headers = TextEditingController(text: formatHeaderLines(headers));
+    _clientId = TextEditingController(text: c?.oauthClientId ?? '');
+    _scope = TextEditingController(text: c?.oauthScope ?? '');
   }
 
   @override
@@ -330,6 +380,8 @@ class _ServerDialogState extends ConsumerState<_ServerDialog> {
     _url.dispose();
     _token.dispose();
     _headers.dispose();
+    _clientId.dispose();
+    _scope.dispose();
     super.dispose();
   }
 
@@ -337,7 +389,12 @@ class _ServerDialogState extends ConsumerState<_ServerDialog> {
     if (!_form.currentState!.validate()) return;
     final headers = parseHeaderLines(_headers.text)!;
     final token = _token.text.trim();
-    if (token.isNotEmpty) headers['Authorization'] = 'Bearer $token';
+    if (_mode == _AuthMode.bearer && token.isNotEmpty) {
+      headers['Authorization'] = 'Bearer $token';
+    }
+    final oauth = _mode == _AuthMode.oauth;
+    final clientId = _clientId.text.trim();
+    final scope = _scope.text.trim();
 
     setState(() => _saving = true);
     final hub = ref.read(mcpHubProvider.notifier);
@@ -346,10 +403,25 @@ class _ServerDialogState extends ConsumerState<_ServerDialog> {
     final existing = widget.existing;
     // Do not await the connection: the card shows its live status.
     if (existing == null) {
-      hub.addServer(name: name, url: url, headers: headers);
+      hub.addServer(
+        name: name,
+        url: url,
+        headers: headers,
+        oauth: oauth,
+        oauthClientId: oauth && clientId.isNotEmpty ? clientId : null,
+        oauthScope: oauth && scope.isNotEmpty ? scope : null,
+      );
     } else {
       hub.updateServer(
-        existing.copyWith(name: name, url: url, headers: headers),
+        existing.copyWith(
+          name: name,
+          url: url,
+          headers: headers,
+          oauth: oauth,
+          clearOAuthOptions: true,
+          oauthClientId: oauth && clientId.isNotEmpty ? clientId : null,
+          oauthScope: oauth && scope.isNotEmpty ? scope : null,
+        ),
       );
     }
     if (mounted) Navigator.pop(context);
@@ -385,15 +457,69 @@ class _ServerDialogState extends ConsumerState<_ServerDialog> {
                       ? null
                       : 'Enter a valid http(s) URL',
                 ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _token,
-                  obscureText: true,
-                  decoration: const InputDecoration(
-                    labelText: 'Bearer token (optional)',
-                    helperText: 'Stored in this browser only.',
+                const SizedBox(height: 16),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Authentication',
+                    style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ),
+                const SizedBox(height: 6),
+                SegmentedButton<_AuthMode>(
+                  showSelectedIcon: false,
+                  segments: const [
+                    ButtonSegment(value: _AuthMode.none, label: Text('None')),
+                    ButtonSegment(
+                      value: _AuthMode.bearer,
+                      label: Text('Bearer token'),
+                    ),
+                    ButtonSegment(value: _AuthMode.oauth, label: Text('OAuth')),
+                  ],
+                  selected: {_mode},
+                  onSelectionChanged: (s) => setState(() => _mode = s.first),
+                ),
+                if (_mode == _AuthMode.bearer) ...[
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _token,
+                    obscureText: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Bearer token',
+                      helperText: 'Stored in this browser only.',
+                    ),
+                    validator: (v) =>
+                        _mode == _AuthMode.bearer && (v ?? '').trim().isEmpty
+                        ? 'Enter a token, or choose None'
+                        : null,
+                  ),
+                ],
+                if (_mode == _AuthMode.oauth) ...[
+                  const SizedBox(height: 12),
+                  OAuthInfo(redirectUri: ref.watch(oauthRedirectUriProvider)),
+                  const SizedBox(height: 8),
+                  ExpansionTile(
+                    tilePadding: EdgeInsets.zero,
+                    title: const Text('Advanced'),
+                    children: [
+                      TextFormField(
+                        controller: _clientId,
+                        decoration: const InputDecoration(
+                          labelText: 'Client ID (optional)',
+                          helperText: 'Only if the server has no dynamic client registration.',
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: _scope,
+                        decoration: const InputDecoration(
+                          labelText: 'Scope (optional)',
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
+                  ),
+                ],
                 const SizedBox(height: 12),
                 TextFormField(
                   controller: _headers,
@@ -427,6 +553,73 @@ class _ServerDialogState extends ConsumerState<_ServerDialog> {
           child: Text(widget.existing == null ? 'Add & connect' : 'Save'),
         ),
       ],
+    );
+  }
+}
+
+/// Explains which redirect URI to allow on the server's OAuth provider. Some
+/// servers only list one client's callback (for example ChatGPT connectors use
+/// `https://chatgpt.com/connector/oauth/<id>`) and will refuse this app until
+/// this app's own callback is added.
+class OAuthInfo extends StatelessWidget {
+  const OAuthInfo({super.key, required this.redirectUri});
+
+  final Uri redirectUri;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final muted = theme.textTheme.bodySmall?.copyWith(
+      color: theme.colorScheme.onSurfaceVariant,
+      height: 1.4,
+    );
+    final local =
+        redirectUri.host == 'localhost' ||
+        redirectUri.host == '127.0.0.1' ||
+        redirectUri.host == '[::1]';
+    final insecure = redirectUri.scheme == 'http' && !local;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: StatusColors.info.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: StatusColors.info.withValues(alpha: 0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Redirect URI for this app', style: theme.textTheme.titleSmall),
+          const SizedBox(height: 6),
+          CodeBlock(redirectUri.toString(), maxHeight: 70),
+          const SizedBox(height: 8),
+          Text(
+            'Allow this exact URI in the server\'s OAuth / authorization '
+            'provider. Servers set up only for ChatGPT '
+            '(https://chatgpt.com/connector/oauth/*) or another client\'s '
+            'callback will reject this app until it is added, or until you '
+            'enter a pre-registered Client ID that already allows it.',
+            style: muted,
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'The authorization server must also allow CORS from '
+            '${redirectUri.scheme}://${redirectUri.authority} on its metadata, '
+            'registration and token endpoints.',
+            style: muted,
+          ),
+          if (insecure) ...[
+            const SizedBox(height: 6),
+            Text(
+              'This page is served over plain http from a non-local address. '
+              'Many providers only accept https or localhost redirect URIs: '
+              'open the app via localhost or serve it over https.',
+              style: muted?.copyWith(color: StatusColors.warn),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }

@@ -6,6 +6,7 @@ import 'package:mcp_manager/engine/core/prefs.dart';
 import 'package:mcp_manager/engine/llm/llm_settings.dart';
 import 'package:mcp_manager/engine/llm/llm_types.dart';
 import 'package:mcp_manager/engine/mcp/mcp_hub.dart';
+import 'package:mcp_manager/engine/mcp/oauth/oauth_service.dart';
 import 'package:mcp_manager/main.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -15,6 +16,7 @@ Future<void> _pumpApp(
   WidgetTester tester, {
   FakeMcpServer? server,
   ScriptedLlm? llm,
+  FakeOAuthWorld? oauth,
   Size size = const Size(1280, 900),
 }) async {
   tester.view.physicalSize = size;
@@ -27,6 +29,13 @@ Future<void> _pumpApp(
     ProviderScope(
       overrides: [
         sharedPreferencesProvider.overrideWithValue(prefs),
+        oauthRedirectUriProvider.overrideWithValue(Uri.parse(oauthRedirect)),
+        if (oauth != null) ...[
+          mcpHttpClientFactoryProvider.overrideWithValue(() => oauth.client),
+          oauthPopupOpenerProvider.overrideWithValue(
+            () => FakePopup.approving(oauth),
+          ),
+        ],
         if (server != null)
           mcpHttpClientFactoryProvider.overrideWithValue(() => server.client),
         if (llm != null)
@@ -277,4 +286,134 @@ void main() {
       expect(tester.takeException(), isNull, reason: 'overflow on $page');
     }
   });
+
+  testWidgets(
+    'OAuth mode shows the redirect URI to allow and the ChatGPT caveat',
+    (tester) async {
+      await _pumpApp(tester);
+      await tester.tap(find.text('Servers').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add your first server'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Redirect URI for this app'), findsNothing);
+      await tester.tap(find.text('Bearer token'));
+      await tester.pumpAndSettle();
+      expect(
+        find.widgetWithText(TextFormField, 'Bearer token'),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.text('OAuth'));
+      await tester.pumpAndSettle();
+
+      expect(find.widgetWithText(TextFormField, 'Bearer token'), findsNothing);
+      expect(find.text('Redirect URI for this app'), findsOneWidget);
+      expect(find.text(oauthRedirect), findsOneWidget);
+      expect(
+        find.textContaining('chatgpt.com/connector/oauth/*'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('allow CORS from https://app.test'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('plain http'),
+        findsNothing,
+        reason: 'https origin',
+      );
+    },
+  );
+
+  testWidgets('OAuth-protected server asks to sign in, then connects', (
+    tester,
+  ) async {
+    final world = FakeOAuthWorld(mcp: FakeMcpServer(tools: _tools));
+    await _pumpApp(tester, oauth: world);
+
+    await tester.tap(find.text('Servers').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Add your first server'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.widgetWithText(TextFormField, 'Name'),
+      'Protected',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextFormField, 'Endpoint URL'),
+      'https://mcp.test/mcp',
+    );
+    await tester.tap(find.text('OAuth'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Add & connect'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Sign-in required'), findsOneWidget);
+    expect(find.text('OAuth'), findsOneWidget, reason: 'badge on the card');
+    expect(find.text('Connected'), findsNothing);
+
+    await tester.tap(find.text('Sign in'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Connected'), findsOneWidget);
+    expect(find.text('Sign in'), findsNothing);
+    expect(find.text('Sign out'), findsOneWidget);
+    expect(world.mcpAuthHeaders.last, startsWith('Bearer '));
+
+    await tester.tap(find.text('Sign out'));
+    await tester.pumpAndSettle();
+    expect(find.text('Sign-in required'), findsOneWidget);
+    expect(find.text('Sign in'), findsOneWidget);
+  });
+
+  testWidgets(
+    'operator adds an OAuth server: summary card, no "always allow", then a Sign in banner',
+    (tester) async {
+      final world = FakeOAuthWorld(mcp: FakeMcpServer(tools: _tools));
+      final llm = ScriptedLlm([
+        [
+          const LlmToolCallsEvent([
+            LlmToolCall(
+              id: 'c1',
+              name: 'mcpm_add_server',
+              arguments: {
+                'name': 'Protected',
+                'url': oauthMcpUrl,
+                'auth': 'oauth',
+              },
+            ),
+          ]),
+        ],
+        [const LlmTextDelta('Added. Please sign in.'), const LlmDone()],
+      ]);
+      await _pumpApp(tester, oauth: world, llm: llm);
+
+      await tester.tap(find.text('Operator').first);
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byType(TextField).last,
+        'add my protected server',
+      );
+      await tester.tap(find.byIcon(Icons.arrow_upward_rounded));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Needs approval'), findsOneWidget);
+      expect(find.textContaining('Add MCP server “Protected”'), findsOneWidget);
+      expect(find.text('Always allow this tool'), findsNothing);
+      expect(find.text('Approve'), findsOneWidget);
+      expect(find.text('Protected needs sign-in'), findsNothing);
+
+      await tester.tap(find.text('Approve'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Added. Please sign in.'), findsOneWidget);
+      expect(find.text('Protected needs sign-in'), findsOneWidget);
+
+      await tester.tap(find.text('Sign in'));
+      await tester.pumpAndSettle();
+      expect(find.text('Protected needs sign-in'), findsNothing);
+      expect(world.mcpAuthHeaders.last, startsWith('Bearer '));
+    },
+  );
 }

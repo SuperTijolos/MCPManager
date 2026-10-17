@@ -4,20 +4,73 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/ids.dart';
 import '../core/json.dart';
+import '../core/prefs.dart';
 import '../llm/llm_settings.dart';
 import '../llm/llm_types.dart';
 import 'agent_tool.dart';
 import 'operator_agent.dart';
 import 'toolbox.dart';
 
+const _storageKey = 'mcpm.chat.v1';
+const _maxStoredItems = 80;
+const _maxStoredOutput = 4000;
+
 sealed class ChatItem {
   const ChatItem(this.id);
   final String id;
+
+  Json toJson();
+
+  static ChatItem? fromJson(Json json) {
+    try {
+      final id = json['id'] as String;
+      switch (json['type']) {
+        case 'user':
+          return UserItem(id, json['text'] as String);
+        case 'assistant':
+          return AssistantItem(
+            id,
+            text: json['text'] as String? ?? '',
+            thinking: json['thinking'] as String? ?? '',
+          );
+        case 'error':
+          return ErrorItem(id, json['message'] as String);
+        case 'tool':
+          // A call that was waiting or running when the page closed never
+          // finished; show it as interrupted rather than pending forever.
+          var status = ToolStatus.values.byName(json['status'] as String);
+          var output = json['output'] as String?;
+          if (status == ToolStatus.awaitingApproval ||
+              status == ToolStatus.running) {
+            status = ToolStatus.error;
+            output = 'Interrupted: the page was closed before this finished.';
+          }
+          return ToolItem(
+            id,
+            callId: json['callId'] as String,
+            name: json['name'] as String,
+            label: json['label'] as String,
+            args: ((json['args'] as Map?) ?? const {}).cast<String, dynamic>(),
+            status: status,
+            output: output,
+            description: json['description'] as String?,
+            summary: json['summary'] as String?,
+            canAlwaysAllow: json['canAlwaysAllow'] as bool? ?? true,
+          );
+      }
+    } catch (_) {
+      // Skip entries from an incompatible version.
+    }
+    return null;
+  }
 }
 
 class UserItem extends ChatItem {
   const UserItem(super.id, this.text);
   final String text;
+
+  @override
+  Json toJson() => {'type': 'user', 'id': id, 'text': text};
 }
 
 class AssistantItem extends ChatItem {
@@ -30,6 +83,14 @@ class AssistantItem extends ChatItem {
     text: text ?? this.text,
     thinking: thinking ?? this.thinking,
   );
+
+  @override
+  Json toJson() => {
+    'type': 'assistant',
+    'id': id,
+    'text': text,
+    'thinking': thinking,
+  };
 }
 
 enum ToolStatus { awaitingApproval, running, done, error, denied }
@@ -44,15 +105,23 @@ class ToolItem extends ChatItem {
     required this.status,
     this.output,
     this.description,
+    this.summary,
+    this.canAlwaysAllow = true,
   });
 
   final String callId;
   final String name;
   final String label;
+
+  /// The arguments as shown to the user (secrets masked for sensitive tools).
   final Json args;
   final ToolStatus status;
   final String? output;
   final String? description;
+
+  /// Plain-language line shown on the approval card, when the tool has one.
+  final String? summary;
+  final bool canAlwaysAllow;
 
   ToolItem copyWith({ToolStatus? status, String? output}) => ToolItem(
     id,
@@ -63,12 +132,32 @@ class ToolItem extends ChatItem {
     status: status ?? this.status,
     output: output ?? this.output,
     description: description,
+    summary: summary,
+    canAlwaysAllow: canAlwaysAllow,
   );
+
+  @override
+  Json toJson() => {
+    'type': 'tool',
+    'id': id,
+    'callId': callId,
+    'name': name,
+    'label': label,
+    'args': args,
+    'status': status.name,
+    'output': output == null ? null : truncate(output!, _maxStoredOutput),
+    'description': description,
+    'summary': summary,
+    'canAlwaysAllow': canAlwaysAllow,
+  };
 }
 
 class ErrorItem extends ChatItem {
   const ErrorItem(super.id, this.message);
   final String message;
+
+  @override
+  Json toJson() => {'type': 'error', 'id': id, 'message': message};
 }
 
 class ChatState {
@@ -97,7 +186,53 @@ class ChatController extends Notifier<ChatState> {
       _cancelled = true;
       _resolveAll(ApprovalDecision.deny);
     });
-    return const ChatState();
+    return _restore();
+  }
+
+  ChatState _restore() {
+    final raw = readJson(ref.read(sharedPreferencesProvider), _storageKey);
+    if (raw is! Map) return const ChatState();
+    final items = <ChatItem>[
+      for (final i in (raw['items'] as List?) ?? const [])
+        ?ChatItem.fromJson((i as Map).cast<String, dynamic>()),
+    ];
+    try {
+      _history.addAll([
+        for (final m in (raw['history'] as List?) ?? const [])
+          LlmMessage.fromJson((m as Map).cast<String, dynamic>()),
+      ]);
+    } catch (_) {
+      _history.clear();
+    }
+    // A run interrupted by closing the page can leave an assistant turn with
+    // tool calls but no results; drop back to the last consistent point.
+    while (_history.isNotEmpty) {
+      final last = _history.last;
+      final consistent =
+          last.role == LlmRole.user ||
+          (last.role == LlmRole.assistant && last.toolCalls.isEmpty);
+      if (consistent) break;
+      _history.removeLast();
+    }
+    return ChatState(items: items);
+  }
+
+  void _persist() {
+    final items = state.items.length > _maxStoredItems
+        ? state.items.sublist(state.items.length - _maxStoredItems)
+        : state.items;
+    // Keep the model history to a window that starts at a user message, so it
+    // never begins with an orphaned tool result.
+    var history = _history.length > 60
+        ? _history.sublist(_history.length - 60)
+        : List.of(_history);
+    while (history.isNotEmpty && history.first.role != LlmRole.user) {
+      history.removeAt(0);
+    }
+    writeJson(ref.read(sharedPreferencesProvider), _storageKey, {
+      'items': [for (final i in items) i.toJson()],
+      'history': [for (final m in history) m.toJson()],
+    });
   }
 
   Future<void> send(String text) async {
@@ -150,6 +285,7 @@ class ChatController extends Notifier<ChatState> {
       if (token == _runToken) {
         _dropEmptyAssistant();
         state = state.copyWith(running: false);
+        _persist();
       }
     }
   }
@@ -166,6 +302,7 @@ class ChatController extends Notifier<ChatState> {
     _history.clear();
     _sessionAllowed.clear();
     state = const ChatState();
+    _persist();
   }
 
   void decide(String callId, ApprovalDecision decision) {
@@ -208,8 +345,10 @@ class ChatController extends Notifier<ChatState> {
             callId: call.id,
             name: call.name,
             label: tool?.label ?? call.name,
-            args: call.arguments,
+            args: tool?.displayArgs(call.arguments) ?? call.arguments,
             description: tool?.description,
+            summary: tool?.summarize(call.arguments),
+            canAlwaysAllow: tool?.canAlwaysAllow ?? true,
             status: needsApproval
                 ? ToolStatus.awaitingApproval
                 : ToolStatus.running,

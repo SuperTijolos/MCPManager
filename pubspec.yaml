@@ -24,6 +24,8 @@ dependencies:
   # is shipped to the browser, so never put secrets in it.
   env_flutter: ^0.1.4
   cupertino_icons: ^1.0.8
+  crypto: ^3.0.7
+  web: ^1.1.1
 
 dev_dependencies:
   flutter_test:

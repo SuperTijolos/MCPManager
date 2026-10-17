@@ -1,5 +1,4 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:http/http.dart' as http;
 
 import '../audit/audit_log.dart';
 import '../audit/audit_models.dart';
@@ -8,11 +7,18 @@ import '../core/json.dart';
 import '../core/prefs.dart';
 import '../core/redact.dart';
 import 'mcp_client.dart';
+import 'mcp_http.dart';
 import 'mcp_models.dart';
+import 'oauth/oauth_flow.dart';
+import 'oauth/oauth_models.dart';
+import 'oauth/oauth_popup.dart';
+import 'oauth/oauth_service.dart';
+
+export 'mcp_http.dart' show mcpHttpClientFactoryProvider;
 
 const _storageKey = 'mcpm.servers.v1';
 
-enum ServerStatus { idle, connecting, connected, error, disabled }
+enum ServerStatus { idle, connecting, connected, needsAuth, error, disabled }
 
 class ServerRuntime {
   const ServerRuntime({
@@ -23,6 +29,7 @@ class ServerRuntime {
     this.error,
     this.latencyMs,
     this.checkedAt,
+    this.authChallenge,
   });
 
   final McpServerConfig config;
@@ -33,6 +40,10 @@ class ServerRuntime {
   final int? latencyMs;
   final DateTime? checkedAt;
 
+  /// `WWW-Authenticate` header from the last 401, used to find the OAuth
+  /// metadata when the user signs in.
+  final String? authChallenge;
+
   ServerRuntime copyWith({
     McpServerConfig? config,
     ServerStatus? status,
@@ -42,6 +53,7 @@ class ServerRuntime {
     bool clearError = false,
     int? latencyMs,
     DateTime? checkedAt,
+    String? authChallenge,
   }) => ServerRuntime(
     config: config ?? this.config,
     status: status ?? this.status,
@@ -50,6 +62,7 @@ class ServerRuntime {
     error: clearError ? null : error ?? this.error,
     latencyMs: latencyMs ?? this.latencyMs,
     checkedAt: checkedAt ?? this.checkedAt,
+    authChallenge: clearError ? null : authChallenge ?? this.authChallenge,
   );
 }
 
@@ -80,11 +93,6 @@ class McpHubState {
         for (final t in s.tools) ToolRef(s.config, t),
   ];
 }
-
-/// Overridden in tests to inject a mock HTTP client.
-final mcpHttpClientFactoryProvider = Provider<http.Client Function()>(
-  (ref) => http.Client.new,
-);
 
 final mcpHubProvider = NotifierProvider<McpHub, McpHubState>(McpHub.new);
 
@@ -137,12 +145,18 @@ class McpHub extends Notifier<McpHubState> {
     required String name,
     required String url,
     Map<String, String> headers = const {},
+    bool oauth = false,
+    String? oauthClientId,
+    String? oauthScope,
   }) async {
     final config = McpServerConfig(
       id: newId('srv'),
       name: name,
       url: url,
       headers: headers,
+      oauth: oauth,
+      oauthClientId: oauthClientId,
+      oauthScope: oauthScope,
     );
     state = McpHubState([...state.servers, ServerRuntime(config: config)]);
     _persist();
@@ -151,6 +165,12 @@ class McpHub extends Notifier<McpHubState> {
   }
 
   Future<void> updateServer(McpServerConfig config) async {
+    final previous = state.byId(config.id)?.config;
+    if (previous != null &&
+        (previous.url != config.url || (previous.oauth && !config.oauth))) {
+      // Tokens are bound to one resource; don't carry them to another server.
+      ref.read(oauthServiceProvider).forget(config.id);
+    }
     _setRuntime(
       config.id,
       (r) => r.copyWith(config: config, tools: const [], clearError: true),
@@ -172,6 +192,7 @@ class McpHub extends Notifier<McpHubState> {
 
   void removeServer(String id) {
     _disposeClient(id);
+    ref.read(oauthServiceProvider).forget(id);
     state = McpHubState([
       for (final s in state.servers)
         if (s.config.id != id) s,
@@ -191,9 +212,14 @@ class McpHub extends Notifier<McpHubState> {
     );
 
     final config = runtime.config;
+    final oauth = ref.read(oauthServiceProvider);
     final client = McpClient(
       config,
       httpClient: ref.read(mcpHttpClientFactoryProvider)(),
+      tokenProvider: config.oauth
+          ? ({bool forceRefresh = false}) =>
+                oauth.accessToken(id, forceRefresh: forceRefresh)
+          : null,
     );
     final watch = Stopwatch()..start();
     try {
@@ -228,6 +254,19 @@ class McpHub extends Notifier<McpHubState> {
             durationMs: watch.elapsedMilliseconds,
             result: '${info.name} ${info.version} · ${tools.length} tools',
           );
+    } on McpAuthRequired catch (e) {
+      // A static token that is rejected is a plain error; anything else means
+      // the user can sign in with OAuth.
+      final needsSignIn = config.oauth || !config.hasStaticAuthorization;
+      _failConnect(
+        id,
+        config,
+        client,
+        e.message,
+        watch,
+        needsAuth: needsSignIn,
+        challenge: e.wwwAuthenticate,
+      );
     } on McpException catch (e) {
       _failConnect(id, config, client, e.message, watch);
     } catch (e) {
@@ -240,18 +279,21 @@ class McpHub extends Notifier<McpHubState> {
     McpServerConfig config,
     McpClient client,
     String message,
-    Stopwatch watch,
-  ) {
+    Stopwatch watch, {
+    bool needsAuth = false,
+    String? challenge,
+  }) {
     watch.stop();
     client.close();
     if (!ref.mounted) return;
     _setRuntime(
       id,
       (r) => r.copyWith(
-        status: ServerStatus.error,
+        status: needsAuth ? ServerStatus.needsAuth : ServerStatus.error,
         error: message,
         tools: const [],
         checkedAt: DateTime.now(),
+        authChallenge: challenge,
       ),
     );
     ref
@@ -265,6 +307,88 @@ class McpHub extends Notifier<McpHubState> {
           serverName: config.name,
           durationMs: watch.elapsedMilliseconds,
           error: redactText(message),
+        );
+  }
+
+  /// Signs in to [id] with OAuth using [popup] (opened by the caller inside a
+  /// click handler), then reconnects. Returns an error message, or null.
+  Future<String?> authorize(String id, OAuthPopup popup) async {
+    final runtime = state.byId(id);
+    if (runtime == null) {
+      popup.close();
+      return 'Unknown server.';
+    }
+    var config = runtime.config;
+    if (!config.oauth) {
+      config = config.copyWith(oauth: true);
+      _setRuntime(id, (r) => r.copyWith(config: config));
+      _persist();
+    }
+    final audit = ref.read(auditLogProvider.notifier);
+    final watch = Stopwatch()..start();
+    try {
+      await ref
+          .read(oauthServiceProvider)
+          .authorize(
+            config: config,
+            popup: popup,
+            challenge: parseBearerChallenge(runtime.authChallenge),
+          );
+      watch.stop();
+      if (!ref.mounted) return null;
+      audit.record(
+        kind: AuditKind.authorize,
+        status: AuditStatus.success,
+        source: AuditSource.system,
+        actor: 'user',
+        serverId: id,
+        serverName: config.name,
+        durationMs: watch.elapsedMilliseconds,
+        result: 'OAuth sign-in completed',
+      );
+      await connect(id);
+      return null;
+    } on OAuthException catch (e) {
+      watch.stop();
+      if (!ref.mounted) return e.message;
+      audit.record(
+        kind: AuditKind.authorize,
+        status: AuditStatus.error,
+        source: AuditSource.system,
+        actor: 'user',
+        serverId: id,
+        serverName: config.name,
+        durationMs: watch.elapsedMilliseconds,
+        error: redactText(e.message),
+      );
+      return e.message;
+    }
+  }
+
+  /// Forgets the OAuth tokens for [id] and disconnects it.
+  void signOut(String id) {
+    final runtime = state.byId(id);
+    if (runtime == null) return;
+    ref.read(oauthServiceProvider).signOut(id);
+    _disposeClient(id);
+    _setRuntime(
+      id,
+      (r) => r.copyWith(
+        status: ServerStatus.needsAuth,
+        tools: const [],
+        error: 'Signed out.',
+      ),
+    );
+    ref
+        .read(auditLogProvider.notifier)
+        .record(
+          kind: AuditKind.authorize,
+          status: AuditStatus.success,
+          source: AuditSource.system,
+          actor: 'user',
+          serverId: id,
+          serverName: runtime.config.name,
+          result: 'Signed out',
         );
   }
 

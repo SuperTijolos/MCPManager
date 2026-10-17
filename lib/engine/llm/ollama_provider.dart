@@ -16,7 +16,8 @@ class OllamaLlmProvider implements LlmProvider {
       maxRetries: 2,
       initialDelay: Duration(milliseconds: 500),
     ),
-  }) : _client = o.OllamaClient(
+  }) : _numCtx = config.contextLength ?? defaultOllamaContext,
+       _client = o.OllamaClient(
          httpClient: httpClient,
          config: o.OllamaConfig(
            baseUrl: config.baseUrl,
@@ -29,6 +30,7 @@ class OllamaLlmProvider implements LlmProvider {
        );
 
   final o.OllamaClient _client;
+  final int _numCtx;
 
   @override
   Future<List<LlmModel>> listModels() async {
@@ -56,6 +58,7 @@ class OllamaLlmProvider implements LlmProvider {
     final request = o.ChatRequest(
       model: model,
       messages: [for (final m in messages) _toOllama(m)],
+      options: o.ModelOptions(numCtx: _numCtx),
       tools: tools.isEmpty
           ? null
           : [

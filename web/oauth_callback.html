@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>MCP Manager sign-in</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: system-ui, sans-serif; background: #0f1318; color: #e6edf3;
+           display: grid; place-items: center; height: 100vh; margin: 0; }
+  </style>
+</head>
+<body>
+  <p id="status">Finishing sign-in…</p>
+  <script>
+    (function () {
+      var params = {};
+      new URLSearchParams(location.search).forEach(function (v, k) { params[k] = v; });
+      // Keep the one-time code out of history once we've read it.
+      history.replaceState(null, '', location.pathname);
+      var message = { type: 'mcpm-oauth', params: params };
+      try { if (window.opener) window.opener.postMessage(message, location.origin); } catch (e) {}
+      try { var bc = new BroadcastChannel('mcpm-oauth'); bc.postMessage(message); bc.close(); } catch (e) {}
+      document.getElementById('status').textContent = params.error
+        ? 'Authorization failed: ' + (params.error_description || params.error)
+        : 'Signed in. You can close this window.';
+      setTimeout(function () { window.close(); }, 600);
+    })();
+  </script>
+</body>
+</html>

@@ -12,6 +12,15 @@ class LlmToolCall {
   final String id;
   final String name;
   final Json arguments;
+
+  Json toJson() => {'id': id, 'name': name, 'arguments': arguments};
+
+  factory LlmToolCall.fromJson(Json json) => LlmToolCall(
+    id: json['id'] as String,
+    name: json['name'] as String,
+    arguments: ((json['arguments'] as Map?) ?? const {})
+        .cast<String, dynamic>(),
+  );
 }
 
 class LlmMessage {
@@ -55,6 +64,28 @@ class LlmMessage {
   final List<LlmToolCall> toolCalls;
   final String? toolCallId;
   final String? toolName;
+
+  Json toJson() => {
+    'role': role.name,
+    'content': content,
+    'thinking': ?thinking,
+    if (toolCalls.isNotEmpty)
+      'toolCalls': [for (final c in toolCalls) c.toJson()],
+    'toolCallId': ?toolCallId,
+    'toolName': ?toolName,
+  };
+
+  factory LlmMessage.fromJson(Json json) => LlmMessage(
+    role: LlmRole.values.byName(json['role'] as String),
+    content: json['content'] as String? ?? '',
+    thinking: json['thinking'] as String?,
+    toolCalls: [
+      for (final c in (json['toolCalls'] as List?) ?? const [])
+        LlmToolCall.fromJson((c as Map).cast<String, dynamic>()),
+    ],
+    toolCallId: json['toolCallId'] as String?,
+    toolName: json['toolName'] as String?,
+  );
 }
 
 class LlmToolSpec {

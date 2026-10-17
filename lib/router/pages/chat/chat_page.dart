@@ -8,6 +8,8 @@ import '../../../engine/agent/chat_controller.dart';
 import '../../../engine/agent/operator_agent.dart';
 import '../../../engine/core/json.dart';
 import '../../../engine/llm/llm_settings.dart';
+import '../../../engine/mcp/mcp_hub.dart';
+import '../../../ui/sign_in.dart';
 import '../../../ui/theme.dart';
 import '../../../ui/widgets.dart';
 
@@ -108,6 +110,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                     ),
                   ),
           ),
+          const _SignInBanner(),
           Padding(
             padding: const EdgeInsets.fromLTRB(
               kPagePadding,
@@ -390,6 +393,10 @@ class _ToolCard extends ConsumerWidget {
                 StatusChip(label, color, icon: icon),
               ],
             ),
+            if (item.summary != null) ...[
+              const SizedBox(height: 8),
+              Text(item.summary!, style: theme.textTheme.bodyMedium),
+            ],
             const SizedBox(height: 8),
             Text('Arguments', style: theme.textTheme.bodySmall),
             const SizedBox(height: 4),
@@ -407,13 +414,14 @@ class _ToolCard extends ConsumerWidget {
                     ),
                     child: const Text('Approve'),
                   ),
-                  OutlinedButton(
-                    onPressed: () => controller.decide(
-                      item.callId,
-                      ApprovalDecision.approveSession,
+                  if (item.canAlwaysAllow)
+                    OutlinedButton(
+                      onPressed: () => controller.decide(
+                        item.callId,
+                        ApprovalDecision.approveSession,
+                      ),
+                      child: const Text('Always allow this tool'),
                     ),
-                    child: const Text('Always allow this tool'),
-                  ),
                   TextButton(
                     onPressed: () =>
                         controller.decide(item.callId, ApprovalDecision.deny),
@@ -440,5 +448,60 @@ class _ToolCard extends ConsumerWidget {
   String _pretty(String text) {
     final decoded = tryDecodeJson(text);
     return decoded == null ? text : prettyJson(decoded);
+  }
+}
+
+/// Offers a Sign in button for servers that need OAuth. The Operator can add
+/// such a server but cannot sign in for the user: the sign-in window has to
+/// open from a real click.
+class _SignInBanner extends ConsumerWidget {
+  const _SignInBanner();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final waiting = [
+      for (final s in ref.watch(mcpHubProvider).servers)
+        if (s.status == ServerStatus.needsAuth) s,
+    ];
+    if (waiting.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(kPagePadding, 4, kPagePadding, 4),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 820),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: StatusColors.warn.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: StatusColors.warn.withValues(alpha: 0.4),
+              ),
+            ),
+            child: Column(
+              children: [
+                for (final s in waiting)
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.lock_outline,
+                        size: 18,
+                        color: StatusColors.warn,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text('${s.config.name} needs sign-in')),
+                      FilledButton.tonal(
+                        onPressed: () =>
+                            signInToServer(context, ref, s.config.id),
+                        child: const Text('Sign in'),
+                      ),
+                    ],
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }

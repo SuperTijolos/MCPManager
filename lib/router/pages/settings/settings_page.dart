@@ -220,6 +220,7 @@ class _ProviderDialogState extends ConsumerState<_ProviderDialog> {
   late final TextEditingController _name;
   late final TextEditingController _url;
   late final TextEditingController _key;
+  late final TextEditingController _context;
   late ProviderKind _kind;
 
   @override
@@ -230,6 +231,9 @@ class _ProviderDialogState extends ConsumerState<_ProviderDialog> {
     _name = TextEditingController(text: p?.name ?? '');
     _url = TextEditingController(text: p?.baseUrl ?? '');
     _key = TextEditingController(text: p?.apiKey ?? '');
+    _context = TextEditingController(
+      text: '${p?.contextLength ?? defaultOllamaContext}',
+    );
   }
 
   @override
@@ -237,6 +241,7 @@ class _ProviderDialogState extends ConsumerState<_ProviderDialog> {
     _name.dispose();
     _url.dispose();
     _key.dispose();
+    _context.dispose();
     super.dispose();
   }
 
@@ -250,6 +255,9 @@ class _ProviderDialogState extends ConsumerState<_ProviderDialog> {
     final key = _key.text.trim();
     final url = normalizeBaseUrl(_url.text);
     final notifier = ref.read(llmSettingsProvider.notifier);
+    final numCtx = _kind == ProviderKind.ollama
+        ? int.tryParse(_context.text.trim())
+        : null;
     if (existing == null) {
       notifier.upsert(
         ProviderConfig(
@@ -261,6 +269,7 @@ class _ProviderDialogState extends ConsumerState<_ProviderDialog> {
           models: _kind == ProviderKind.ollama
               ? const [defaultOllamaModel]
               : const [],
+          contextLength: numCtx,
         ),
       );
     } else {
@@ -271,6 +280,8 @@ class _ProviderDialogState extends ConsumerState<_ProviderDialog> {
           baseUrl: url,
           apiKey: key.isEmpty ? null : key,
           clearApiKey: key.isEmpty,
+          contextLength: numCtx,
+          clearContextLength: numCtx == null,
         ),
       );
     }
@@ -326,6 +337,27 @@ class _ProviderDialogState extends ConsumerState<_ProviderDialog> {
                     helperText: 'Stored in this browser only.',
                   ),
                 ),
+                if (_kind == ProviderKind.ollama) ...[
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _context,
+                    keyboardType: TextInputType.number,
+                    decoration: InputDecoration(
+                      labelText: 'Context window (tokens)',
+                      helperText:
+                          'Ollama\'s own default is small; the Operator\'s tool list needs a few thousand. Empty = $defaultOllamaContext. Larger uses more memory.',
+                      helperMaxLines: 3,
+                    ),
+                    validator: (v) {
+                      final text = (v ?? '').trim();
+                      if (text.isEmpty) return null;
+                      final n = int.tryParse(text);
+                      return n == null || n < 1024 || n > 1048576
+                          ? 'Enter 1024 or more, or leave empty for the default'
+                          : null;
+                    },
+                  ),
+                ],
               ],
             ),
           ),

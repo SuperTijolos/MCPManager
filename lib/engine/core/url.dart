@@ -14,9 +14,17 @@ String normalizeBaseUrl(String input) {
   return url;
 }
 
+final _hostName = RegExp(r'^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$');
+
 bool isValidHttpUrl(String input) {
+  if (input.contains(RegExp(r'\s'))) return false;
   final uri = Uri.tryParse(input);
-  return uri != null &&
-      (uri.scheme == 'http' || uri.scheme == 'https') &&
-      uri.host.isNotEmpty;
+  if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
+    return false;
+  }
+  final host = uri.host;
+  if (host.isEmpty) return false;
+  // Dart's parser tolerates odd characters in hosts; accept only real
+  // hostnames, IPv4 addresses and IPv6 literals.
+  return host.contains(':') || _hostName.hasMatch(host);
 }

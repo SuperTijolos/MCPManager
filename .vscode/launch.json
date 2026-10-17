@@ -1,0 +1,22 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "MCP Manager (Chrome :8080, debug)",
+      "type": "dart",
+      "request": "launch",
+      "program": "lib/main.dart",
+      "deviceId": "chrome",
+      "args": ["--web-port=9090"]
+    },
+    {
+      "name": "MCP Manager (share on network :8080, release)",
+      "type": "dart",
+      "request": "launch",
+      "program": "lib/main.dart",
+      "deviceId": "web-server",
+      "flutterMode": "release",
+      "args": ["--web-hostname=0.0.0.0", "--web-port=8080"]
+    }
+  ]
+}

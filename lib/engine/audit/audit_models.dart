@@ -1,6 +1,6 @@
 import '../core/json.dart';
 
-enum AuditKind { toolCall, serverConnect }
+enum AuditKind { toolCall, serverConnect, authorize, manage }
 
 enum AuditStatus { success, error, denied }
 
@@ -83,5 +83,8 @@ class AuditEvent {
   String get title => switch (kind) {
     AuditKind.toolCall => '${serverName ?? '?'} · ${toolName ?? '?'}',
     AuditKind.serverConnect => 'Connect ${serverName ?? '?'}',
+    AuditKind.authorize => 'Authorize ${serverName ?? '?'}',
+    AuditKind.manage =>
+      'Manage · ${toolName ?? '?'}${serverName == null ? '' : ' · $serverName'}',
   };
 }

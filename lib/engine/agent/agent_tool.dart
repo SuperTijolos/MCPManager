@@ -31,6 +31,17 @@ abstract class AgentTool {
   /// that are known to be read-only opt out.
   bool get requiresApproval;
 
+  /// Whether "always allow this tool" may be offered. Tools that change
+  /// configuration or delete data must be approved every single time.
+  bool get canAlwaysAllow => true;
+
+  /// A plain-language line for the approval card ("Add MCP server …"), or null
+  /// to show only the arguments.
+  String? summarize(Json args) => null;
+
+  /// The arguments as shown to the user. Tools that take secrets mask them.
+  Json displayArgs(Json args) => args;
+
   Future<AgentToolResult> run(Json args, ToolRunContext context);
 
   /// Called when a human refused this call, so it can be audited.

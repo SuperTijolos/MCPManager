@@ -22,6 +22,18 @@ void main() {
       expect(isValidHttpUrl('http://'), isFalse);
       expect(isValidHttpUrl(''), isFalse);
     });
+
+    test('isValidHttpUrl rejects junk hosts that Uri.parse tolerates', () {
+      expect(isValidHttpUrl('http://not a url!!'), isFalse);
+      expect(isValidHttpUrl('http://a b.test/mcp'), isFalse);
+      expect(isValidHttpUrl('http://exa!mple.test'), isFalse);
+      expect(isValidHttpUrl('http://-bad.test'), isFalse);
+      expect(isValidHttpUrl('https://mcp.example.com/mcp?x=1'), isTrue);
+      expect(isValidHttpUrl('http://localhost:8765/mcp'), isTrue);
+      expect(isValidHttpUrl('http://100.100.1.9:8080'), isTrue);
+      expect(isValidHttpUrl('http://[::1]:11434'), isTrue);
+      expect(isValidHttpUrl('http://my_docker_host:3000'), isTrue);
+    });
   });
 
   group('redact', () {

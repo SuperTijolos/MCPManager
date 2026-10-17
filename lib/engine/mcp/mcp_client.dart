@@ -16,11 +16,15 @@ const _clientVersion = '1.0.0';
 /// the target server must send CORS headers that allow `Mcp-Session-Id`,
 /// `MCP-Protocol-Version` and any auth header, and expose `Mcp-Session-Id`.
 class McpClient {
-  McpClient(this.config, {http.Client? httpClient})
+  McpClient(this.config, {http.Client? httpClient, this.tokenProvider})
     : _http = httpClient ?? http.Client(),
       _ownsClient = httpClient == null;
 
   final McpServerConfig config;
+
+  /// Supplies an OAuth access token; called with `forceRefresh: true` after a
+  /// 401. Returning null means the user must sign in again.
+  final Future<String?> Function({bool forceRefresh})? tokenProvider;
   final http.Client _http;
   final bool _ownsClient;
 
@@ -96,9 +100,10 @@ class McpClient {
     if (_ownsClient) _http.close();
   }
 
-  Map<String, String> _headers() => {
+  Map<String, String> _headers({String? token}) => {
     'content-type': 'application/json',
     'accept': 'application/json, text/event-stream',
+    'authorization': ?(token == null ? null : 'Bearer $token'),
     ...config.headers,
     'mcp-session-id': ?_sessionId,
     if (_initialized) 'mcp-protocol-version': _protocolVersion,
@@ -114,6 +119,7 @@ class McpClient {
     Json? params, {
     Duration timeout = const Duration(seconds: 30),
     bool allowReconnect = true,
+    bool allowReauth = true,
   }) async {
     final id = _nextId++;
     final body = jsonEncode({
@@ -132,10 +138,28 @@ class McpClient {
       await connect();
       return _request(method, params, timeout: timeout, allowReconnect: false);
     }
-    if (response.statusCode == 401 || response.statusCode == 403) {
+    if (response.statusCode == 401 && tokenProvider != null && allowReauth) {
+      // The access token may have been revoked or expired early: refresh once.
+      if (await tokenProvider!(forceRefresh: true) != null) {
+        return _request(
+          method,
+          params,
+          timeout: timeout,
+          allowReconnect: allowReconnect,
+          allowReauth: false,
+        );
+      }
+    }
+    if (response.statusCode == 401) {
+      throw McpAuthRequired(
+        'Unauthorized (HTTP 401). ${tokenProvider != null || !config.hasStaticAuthorization ? 'Sign-in is required.' : 'Check the server headers/token.'}',
+        wwwAuthenticate: response.headers['www-authenticate'],
+      );
+    }
+    if (response.statusCode == 403) {
       throw McpException(
-        'Unauthorized (HTTP ${response.statusCode}). Check the server headers/token.',
-        code: response.statusCode,
+        'Forbidden (HTTP 403). The credentials were accepted but lack access.',
+        code: 403,
       );
     }
     if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -163,8 +187,13 @@ class McpClient {
 
   Future<http.Response> _post(String body, Duration timeout) async {
     try {
+      final token = await tokenProvider?.call(forceRefresh: false);
       return await _http
-          .post(Uri.parse(config.url), headers: _headers(), body: body)
+          .post(
+            Uri.parse(config.url),
+            headers: _headers(token: token),
+            body: body,
+          )
           .timeout(timeout);
     } on TimeoutException {
       throw McpException('Timed out after ${timeout.inSeconds}s');
