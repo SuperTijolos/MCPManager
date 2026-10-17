@@ -240,11 +240,29 @@ void main() {
     expect((stats.success, stats.error, stats.denied), (1, 1, 1));
     expect(stats.avgLatencyMs, 200); // denied calls have no latency
     expect(stats.hourly, hasLength(24));
-    expect(stats.hourly.last.start.hour, 15);
+    expect(stats.hourly.last.start.hour, 14); // rolling hour ends at 15:30
     expect(stats.hourly.last.total, 2);
     expect(stats.hourly[22].denied, 1);
     expect(stats.topTools.single.key, 'S · T');
     expect(stats.topTools.single.value, 3);
+  });
+  test('rolling stats include the first partial hour', () {
+    final now = DateTime(2026, 10, 17, 15, 30);
+    final event = AuditEvent(
+      id: 'boundary',
+      timestamp: DateTime(2026, 10, 16, 15, 45),
+      kind: AuditKind.toolCall,
+      status: AuditStatus.success,
+      source: AuditSource.workbench,
+      actor: 'user',
+      serverName: 'S',
+      toolName: 'T',
+    );
+    final stats = AuditStats.compute([event], now: now);
+    expect(stats.total, 1);
+    expect(stats.hourly.first.start.hour, 15);
+    expect(stats.hourly.first.start.minute, 30);
+    expect(stats.hourly.first.success, 1);
   });
 }
 

@@ -51,12 +51,21 @@ void main() {
     expect(find.text('Overview'), findsWidgets);
     expect(find.text('Servers online'), findsOneWidget);
     expect(find.text('0/0'), findsOneWidget);
-    expect(
-      find.textContaining('No tool calls in the last 24 hours'),
-      findsOneWidget,
-    );
+    expect(find.textContaining('No tool calls in this period'), findsOneWidget);
     // Gemma 4 on Ollama is configured by default.
+    await tester.scrollUntilVisible(find.text('gemma4'), 240);
     expect(find.text('gemma4'), findsOneWidget);
+  });
+
+  testWidgets('Overview time selector updates analytics', (tester) async {
+    await pumpApp(tester);
+    expect(find.text('Tool calls · 24h'), findsOneWidget);
+    await tester.tap(find.text('7d'));
+    await tester.pumpAndSettle();
+    expect(find.text('Tool calls · 7d'), findsOneWidget);
+    await tester.tap(find.text('6h'));
+    await tester.pumpAndSettle();
+    expect(find.text('Tool calls · 6h'), findsOneWidget);
   });
 
   testWidgets('add-server form validates, then connects and lists the server', (

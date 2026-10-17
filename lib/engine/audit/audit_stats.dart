@@ -50,12 +50,9 @@ class AuditStats {
         .toList();
 
     final hours = window.inHours;
-    final firstHour = DateTime(
-      end.year,
-      end.month,
-      end.day,
-      end.hour,
-    ).subtract(Duration(hours: hours - 1));
+    // Rolling one-hour buckets cover the exact requested interval; aligning to
+    // clock hours would mislabel or omit events in the first partial hour.
+    final firstHour = since;
     final success = List.filled(hours, 0);
     final error = List.filled(hours, 0);
     final denied = List.filled(hours, 0);
