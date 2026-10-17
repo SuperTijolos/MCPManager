@@ -1,8 +1,14 @@
 # MCP Manager
 
-MCP Manager is a control panel for [Model Context Protocol](https://modelcontextprotocol.io) (MCP) servers, built in Flutter for the Hacktober Portimão festival. Connect your servers, inspect and test their tools, audit every call, and work with all of it through a local model: **Gemma 4 via Ollama**, or any OpenAI-compatible endpoint.
+MCP Manager is a control panel for [Model Context Protocol](https://modelcontextprotocol.io) (MCP) servers. It lets you connect the servers you use, see which tools each one offers, try those tools by hand, and keep a full record of every call made to them. On top of that sits the **Operator**, a chat assistant backed by a local model, **Gemma 4 through Ollama**, or any OpenAI-compatible endpoint. The Operator can find the right tool for a job, run it, and manage your servers, and it asks for your approval before doing anything that is not read-only.
 
-It is a ground-up rewrite of an earlier Node/Next.js version (kept locally in `.old/`, not tracked).
+It is a Flutter web app built for the Hacktober Portimão festival, and a ground-up rewrite of an earlier Node/Next.js version (kept locally in `.old/`, not tracked).
+
+- **Connect any MCP server.** Streamable HTTP and the older HTTP+SSE transport are detected automatically. Authenticate with a bearer token, OAuth (PKCE), or custom headers, and test a connection before saving it.
+- **Inspect and test tools.** Read each tool's schema and run it from a test bench. Rules add shared arguments such as `reason` or `expected result` to many tools at once, and can hide or reshape what the Operator sees.
+- **Audit everything.** Every tool call, connection, sign-in and management action is recorded with the actor and how it was approved. Secrets are redacted, and the log can be filtered, paginated and inspected event by event.
+- **Operate with approvals.** Read-only tools run without asking. Anything else waits for your approval, and changes to configuration can never be auto-approved.
+- **Run entirely in the browser.** There is no server of our own. Settings, servers and history stay in your browser's local storage, and backups move them between machines.
 
 **Credits.** Made in collaboration with Tomás Rodrigues, [GuikiPT](https://github.com/GuikiPT) and [AjaxR0](https://github.com/AjaxR0). Their names and GitHub profiles are also listed on the MLH team page for the project.
 
