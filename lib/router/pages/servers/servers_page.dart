@@ -34,7 +34,7 @@ class _ServersPageState extends ConsumerState<ServersPage> {
 
     return PageScaffold(
       title: 'Servers',
-      subtitle: 'Downstream MCP servers (Streamable HTTP)',
+      subtitle: 'Downstream MCP servers (Streamable HTTP or legacy SSE)',
       actions: [
         IconButton(
           tooltip: 'Reconnect all',
@@ -59,7 +59,7 @@ class _ServersPageState extends ConsumerState<ServersPage> {
           ? EmptyState(
               icon: Icons.dns_outlined,
               title: 'No servers yet',
-              message: 'Add an MCP server that speaks Streamable HTTP. From a browser it must allow CORS for this origin.',
+              message: 'Add an MCP server (Streamable HTTP or legacy SSE, detected automatically). From a browser it must allow CORS for this origin.',
               action: FilledButton.icon(
                 onPressed: () => showServerDialog(context, ref),
                 icon: const Icon(Icons.add),
@@ -154,6 +154,8 @@ class _ServerCard extends ConsumerWidget {
                 Wrap(
                   spacing: 6,
                   children: [
+                    if (config.transport == McpTransport.sse)
+                      const StatusChip('SSE', StatusColors.muted),
                     if (config.oauth)
                       const StatusChip(
                         'OAuth',
@@ -344,6 +346,7 @@ class _ServerDialogState extends ConsumerState<_ServerDialog> {
   late final TextEditingController _clientId;
   late final TextEditingController _scope;
   late _AuthMode _mode;
+  late McpTransport _transport;
   bool _saving = false;
 
   @override
@@ -366,6 +369,7 @@ class _ServerDialogState extends ConsumerState<_ServerDialog> {
         : token.isNotEmpty
         ? _AuthMode.bearer
         : _AuthMode.none;
+    _transport = c?.transport ?? McpTransport.auto;
     _name = TextEditingController(text: c?.name ?? '');
     _url = TextEditingController(text: c?.url ?? '');
     _token = TextEditingController(text: token);
@@ -410,6 +414,7 @@ class _ServerDialogState extends ConsumerState<_ServerDialog> {
         oauth: oauth,
         oauthClientId: oauth && clientId.isNotEmpty ? clientId : null,
         oauthScope: oauth && scope.isNotEmpty ? scope : null,
+        transport: _transport,
       );
     } else {
       hub.updateServer(
@@ -421,6 +426,7 @@ class _ServerDialogState extends ConsumerState<_ServerDialog> {
           clearOAuthOptions: true,
           oauthClientId: oauth && clientId.isNotEmpty ? clientId : null,
           oauthScope: oauth && scope.isNotEmpty ? scope : null,
+          transport: _transport,
         ),
       );
     }
@@ -456,6 +462,22 @@ class _ServerDialogState extends ConsumerState<_ServerDialog> {
                   validator: (v) => isValidHttpUrl(normalizeBaseUrl(v ?? ''))
                       ? null
                       : 'Enter a valid http(s) URL',
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<McpTransport>(
+                  initialValue: _transport,
+                  decoration: const InputDecoration(
+                    labelText: 'Transport',
+                    helperText:
+                        'Auto tries Streamable HTTP, then legacy SSE (…/sse).',
+                    helperMaxLines: 2,
+                  ),
+                  items: [
+                    for (final t in McpTransport.values)
+                      DropdownMenuItem(value: t, child: Text(t.label)),
+                  ],
+                  onChanged: (v) =>
+                      setState(() => _transport = v ?? _transport),
                 ),
                 const SizedBox(height: 16),
                 Align(

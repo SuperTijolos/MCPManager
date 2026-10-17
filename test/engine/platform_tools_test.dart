@@ -823,4 +823,62 @@ void main() {
       expect(stored['history'], isEmpty);
     });
   });
+
+  group('transports', () {
+    test('adding a legacy-SSE bridge from just host:port reports what was detected', () async {
+      final bridge = FakeSseServer(
+        tools: _tools,
+        requireToken: 'tok',
+        handlers: {'lookup': (_) => textResult('x')},
+      );
+      final c = await _container(httpClient: bridge.client);
+
+      final r = await _run(c, 'mcpm_add_server', {
+        'name': 'VS Code',
+        'url': 'localhost:3333',
+        'auth': 'bearer',
+        'bearer_token': 'tok',
+      });
+
+      expect(r.isError, isFalse, reason: r.text);
+      final out = _json(r);
+      expect(out['status'], 'connected');
+      expect(out['transport'], 'sse');
+      expect(out['url'], 'http://localhost:3333/sse');
+      expect(out['tools'], 1);
+      expect(r.text, isNot(contains('"tok"')));
+    });
+
+    test(
+      'an explicit transport is accepted; unknown ones are rejected clearly',
+      () async {
+        final bridge = FakeSseServer(tools: _tools);
+        final c = await _container(httpClient: bridge.client);
+
+        final bad = await _run(c, 'mcpm_add_server', {
+          'name': 'A',
+          'url': 'http://localhost:3333/sse',
+          'transport': 'websocket',
+        });
+        expect(bad.isError, isTrue);
+        expect(bad.text, contains('auto, streamable-http, sse'));
+
+        final ok = _json(
+          await _run(c, 'mcpm_add_server', {
+            'name': 'B',
+            'url': 'http://localhost:3333/sse',
+            'transport': 'sse',
+          }),
+        );
+        expect(ok['transport'], 'sse');
+        expect(
+          _tool(
+            c,
+            'mcpm_add_server',
+          ).summarize({'name': 'B', 'url': 'x', 'transport': 'sse'}),
+          contains('transport: sse'),
+        );
+      },
+    );
+  });
 }

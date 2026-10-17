@@ -402,3 +402,187 @@ class FakePopup implements OAuthPopup {
   @override
   void close() => closed = true;
 }
+
+// ---------------------------------------------------------------------------
+// Legacy HTTP+SSE transport
+
+/// A server speaking the legacy MCP HTTP+SSE transport, with the routing of the
+/// real VS Code MCP Bridge extension: `GET /sse` (exact path) opens the event
+/// stream and announces `/messages?sessionId=…`; `POST /messages` answers
+/// `202 Accepted` and sends the JSON-RPC reply on the stream; every other path
+/// is a 404. Optionally demands a bearer token on everything but `/health`.
+class FakeSseServer {
+  FakeSseServer({
+    this.tools = const [],
+    this.handlers = const {},
+    this.requireToken,
+    this.endpointOverride,
+    this.chunkSize,
+    this.silent = false,
+    this.replyDelays = const {},
+  });
+
+  final List<Json> tools;
+  final Map<String, Json Function(Json args)> handlers;
+  final String? requireToken;
+
+  /// Sent instead of the normal `/messages?sessionId=…` endpoint.
+  final String? endpointOverride;
+
+  /// Split the stream into chunks of this many bytes (tests incremental parsing).
+  final int? chunkSize;
+
+  /// Open the stream but never send the endpoint event.
+  final bool silent;
+
+  /// tool name -> delay before its reply is sent.
+  final Map<String, Duration> replyDelays;
+
+  final log = <String>[]; // "METHOD path?query"
+  final authHeaders = <String?>[];
+  final posts = <Json>[];
+  int sessions = 0;
+  int streamsCancelled = 0;
+
+  StreamController<List<int>>? _stream;
+  String? _session;
+
+  void dropStream() => _stream?.close();
+
+  void _send(String text) {
+    final bytes = utf8.encode(text);
+    final c = _stream;
+    if (c == null || c.isClosed) return;
+    final size = chunkSize;
+    if (size == null) {
+      c.add(bytes);
+      return;
+    }
+    for (var i = 0; i < bytes.length; i += size) {
+      c.add(
+        bytes.sublist(i, i + size > bytes.length ? bytes.length : i + size),
+      );
+    }
+  }
+
+  http.Response _plain(
+    int status, [
+    String body = '',
+    Map<String, String>? headers,
+  ]) => http.Response(
+    body,
+    status,
+    headers: {'access-control-allow-origin': '*', ...?headers},
+  );
+
+  http.Client get client => MockClient.streaming((request, bodyStream) async {
+    final path = request.url.path;
+    final query = request.url.hasQuery ? '?${request.url.query}' : '';
+    log.add('${request.method} $path$query');
+
+    http.StreamedResponse respond(http.Response r) => http.StreamedResponse(
+      Stream.value(r.bodyBytes),
+      r.statusCode,
+      headers: r.headers,
+    );
+
+    if (request.method == 'OPTIONS') return respond(_plain(204));
+    if (path == '/health') return respond(_plain(200, '{"status":"ok"}'));
+
+    authHeaders.add(request.headers['authorization']);
+    if (requireToken != null &&
+        request.headers['authorization'] != 'Bearer $requireToken') {
+      return respond(
+        _plain(401, '{"error":"Unauthorized"}', {
+          'content-type': 'application/json',
+        }),
+      );
+    }
+
+    if (request.method == 'GET' && path == '/sse' && query.isEmpty) {
+      sessions++;
+      _session = 's$sessions';
+      final controller = StreamController<List<int>>(
+        onCancel: () => streamsCancelled++,
+      );
+      _stream = controller;
+      if (!silent) {
+        final endpoint = endpointOverride ?? '/messages?sessionId=$_session';
+        _send('event: endpoint\ndata: $endpoint\n\n');
+      }
+      return http.StreamedResponse(
+        controller.stream,
+        200,
+        headers: {
+          'content-type': 'text/event-stream',
+          'access-control-allow-origin': '*',
+        },
+      );
+    }
+
+    if (request.method == 'POST' && path.startsWith('/messages')) {
+      if (request.url.queryParameters['sessionId'] != _session) {
+        return respond(_plain(404, 'Session not found'));
+      }
+      final body = (jsonDecode(await bodyStream.bytesToString()) as Map)
+          .cast<String, dynamic>();
+      posts.add(body);
+      final id = body['id'];
+      if (id != null) _reply(body, id);
+      return respond(_plain(202, 'Accepted'));
+    }
+    return respond(_plain(404));
+  });
+
+  void _reply(Json body, Object id) {
+    final method = body['method'] as String;
+    Json message;
+    var delay = Duration.zero;
+    switch (method) {
+      case 'initialize':
+        message = {
+          'jsonrpc': '2.0',
+          'id': id,
+          'result': {
+            'protocolVersion': '2024-11-05',
+            'capabilities': {'tools': {}},
+            'serverInfo': {'name': 'vscode-mcp-bridge', 'version': '0.2.5'},
+          },
+        };
+      case 'tools/list':
+        message = {
+          'jsonrpc': '2.0',
+          'id': id,
+          'result': {'tools': tools},
+        };
+      case 'tools/call':
+        final params = (body['params'] as Map).cast<String, dynamic>();
+        final handler = handlers[params['name']];
+        delay = replyDelays[params['name']] ?? Duration.zero;
+        message = handler == null
+            ? {
+                'jsonrpc': '2.0',
+                'id': id,
+                'error': {'code': -32602, 'message': 'Unknown tool'},
+              }
+            : {
+                'jsonrpc': '2.0',
+                'id': id,
+                'result': handler(
+                  (params['arguments'] as Map?)?.cast<String, dynamic>() ?? {},
+                ),
+              };
+      case 'ping':
+        message = {'jsonrpc': '2.0', 'id': id, 'result': {}};
+      default:
+        message = {
+          'jsonrpc': '2.0',
+          'id': id,
+          'error': {'code': -32601, 'message': 'Method not found'},
+        };
+    }
+    final text = 'event: message\ndata: ${jsonEncode(message)}\n\n';
+    // Replies come over the stream, after the POST has been acknowledged.
+    Future<void>.delayed(delay, () => _send(text));
+  }
+}

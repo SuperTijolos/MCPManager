@@ -6,7 +6,8 @@ import '../core/ids.dart';
 import '../core/json.dart';
 import '../core/prefs.dart';
 import '../core/redact.dart';
-import 'mcp_client.dart';
+import 'mcp_auto_connection.dart';
+import 'mcp_connection.dart';
 import 'mcp_http.dart';
 import 'mcp_models.dart';
 import 'oauth/oauth_flow.dart';
@@ -97,7 +98,7 @@ class McpHubState {
 final mcpHubProvider = NotifierProvider<McpHub, McpHubState>(McpHub.new);
 
 class McpHub extends Notifier<McpHubState> {
-  final _clients = <String, McpClient>{};
+  final _clients = <String, McpConnection>{};
 
   @override
   McpHubState build() {
@@ -148,6 +149,7 @@ class McpHub extends Notifier<McpHubState> {
     bool oauth = false,
     String? oauthClientId,
     String? oauthScope,
+    McpTransport transport = McpTransport.auto,
   }) async {
     final config = McpServerConfig(
       id: newId('srv'),
@@ -157,6 +159,7 @@ class McpHub extends Notifier<McpHubState> {
       oauth: oauth,
       oauthClientId: oauthClientId,
       oauthScope: oauthScope,
+      transport: transport,
     );
     state = McpHubState([...state.servers, ServerRuntime(config: config)]);
     _persist();
@@ -213,7 +216,7 @@ class McpHub extends Notifier<McpHubState> {
 
     final config = runtime.config;
     final oauth = ref.read(oauthServiceProvider);
-    final client = McpClient(
+    final client = createMcpConnection(
       config,
       httpClient: ref.read(mcpHttpClientFactoryProvider)(),
       tokenProvider: config.oauth
@@ -231,9 +234,19 @@ class McpHub extends Notifier<McpHubState> {
         return;
       }
       _clients[id] = client;
+      // Remember what auto-detection found (transport, and the endpoint when
+      // a bare host:port resolved to /mcp or /sse) so the next connect is
+      // direct and the user can see what is in use.
+      final resolved = config.copyWith(
+        transport: client.transport,
+        url: client.endpointUrl,
+      );
+      final detected =
+          resolved.transport != config.transport || resolved.url != config.url;
       _setRuntime(
         id,
         (r) => r.copyWith(
+          config: detected ? resolved : null,
           status: ServerStatus.connected,
           info: info,
           tools: tools,
@@ -242,6 +255,7 @@ class McpHub extends Notifier<McpHubState> {
           clearError: true,
         ),
       );
+      if (detected) _persist();
       ref
           .read(auditLogProvider.notifier)
           .record(
@@ -277,7 +291,7 @@ class McpHub extends Notifier<McpHubState> {
   void _failConnect(
     String id,
     McpServerConfig config,
-    McpClient client,
+    McpConnection client,
     String message,
     Stopwatch watch, {
     bool needsAuth = false,
@@ -408,7 +422,8 @@ class McpHub extends Notifier<McpHubState> {
     final argsPreview = redactedPreview(args);
     final client = _clients[serverId];
 
-    if (runtime == null || client == null || !client.isConnected) {
+    // A legacy-SSE connection whose stream dropped reconnects by itself on use.
+    if (runtime == null || client == null) {
       const message = 'Server is not connected.';
       audit.record(
         kind: AuditKind.toolCall,

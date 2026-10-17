@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../core/json.dart';
+import 'mcp_connection.dart';
 import 'mcp_models.dart';
 
 const mcpProtocolVersion = '2025-06-18';
@@ -15,7 +16,7 @@ const _clientVersion = '1.0.0';
 /// It deliberately avoids `dart:io` so it works in the browser. In a browser
 /// the target server must send CORS headers that allow `Mcp-Session-Id`,
 /// `MCP-Protocol-Version` and any auth header, and expose `Mcp-Session-Id`.
-class McpClient {
+class McpClient implements McpConnection {
   McpClient(this.config, {http.Client? httpClient, this.tokenProvider})
     : _http = httpClient ?? http.Client(),
       _ownsClient = httpClient == null;
@@ -24,7 +25,7 @@ class McpClient {
 
   /// Supplies an OAuth access token; called with `forceRefresh: true` after a
   /// 401. Returning null means the user must sign in again.
-  final Future<String?> Function({bool forceRefresh})? tokenProvider;
+  final TokenProvider? tokenProvider;
   final http.Client _http;
   final bool _ownsClient;
 
@@ -33,8 +34,16 @@ class McpClient {
   bool _initialized = false;
   int _nextId = 1;
 
+  @override
   bool get isConnected => _initialized;
 
+  @override
+  McpTransport get transport => McpTransport.streamableHttp;
+
+  @override
+  String get endpointUrl => config.url;
+
+  @override
   Future<McpServerInfo> connect() async {
     _sessionId = null;
     _initialized = false;
@@ -58,6 +67,7 @@ class McpClient {
     );
   }
 
+  @override
   Future<List<McpTool>> listTools() async {
     final tools = <McpTool>[];
     String? cursor;
@@ -75,6 +85,7 @@ class McpClient {
     return tools;
   }
 
+  @override
   Future<McpToolResult> callTool(String name, Json arguments) async {
     final result = await _request('tools/call', {
       'name': name,
@@ -83,8 +94,10 @@ class McpClient {
     return McpToolResult.fromJson(result);
   }
 
+  @override
   Future<void> ping() => _request('ping', null);
 
+  @override
   void close() {
     final headers = _sessionId == null ? null : _headers();
     _initialized = false;
@@ -152,7 +165,7 @@ class McpClient {
     }
     if (response.statusCode == 401) {
       throw McpAuthRequired(
-        'Unauthorized (HTTP 401). ${tokenProvider != null || !config.hasStaticAuthorization ? 'Sign-in is required.' : 'Check the server headers/token.'}',
+        unauthorizedMessage(config, oauth: tokenProvider != null),
         wwwAuthenticate: response.headers['www-authenticate'],
       );
     }

@@ -24,6 +24,7 @@ class ToolArgError implements Exception {
 }
 
 const _authModes = ['none', 'bearer', 'oauth'];
+const _transports = ['auto', 'streamable-http', 'sse'];
 
 Json _object(Json properties, [List<String> required = const []]) => {
   'type': 'object',
@@ -402,6 +403,11 @@ List<AgentTool> platformTools(Ref ref) {
           'type': 'string',
           'description': 'MCP endpoint, e.g. https://example.com/mcp',
         },
+        'transport': {
+          'type': 'string',
+          'enum': _transports,
+          'description': 'Default "auto": tries Streamable HTTP then legacy SSE (and /mcp, /sse for a bare host:port). Use "sse" for servers whose endpoint is /sse.',
+        },
         'auth': {
           'type': 'string',
           'enum': _authModes,
@@ -445,6 +451,7 @@ List<AgentTool> platformTools(Ref ref) {
         oauth: config.oauth,
         oauthClientId: config.oauthClientId,
         oauthScope: config.oauthScope,
+        transport: _transport(args['transport']),
       );
       return serverSummary(runtime);
     },
@@ -454,7 +461,7 @@ List<AgentTool> platformTools(Ref ref) {
     mask: true,
     summary: (args) =>
         'Add MCP server “${args['name']}” at ${args['url']} '
-        '(auth: ${args['auth'] ?? 'none'})',
+        '(auth: ${args['auth'] ?? 'none'}, transport: ${args['transport'] ?? 'auto'})',
   );
 
   add(
@@ -469,6 +476,7 @@ List<AgentTool> platformTools(Ref ref) {
         },
         'new_name': {'type': 'string'},
         'url': {'type': 'string'},
+        'transport': {'type': 'string', 'enum': _transports},
         'auth': {'type': 'string', 'enum': _authModes},
         'bearer_token': {
           'type': 'string',
@@ -495,6 +503,9 @@ List<AgentTool> platformTools(Ref ref) {
         next = next.copyWith(name: name);
       }
       if (args['url'] != null) next = next.copyWith(url: _url(args['url']));
+      if (args['transport'] != null) {
+        next = next.copyWith(transport: _transport(args['transport']));
+      }
       if (args['headers'] != null) {
         final keep = {
           for (final e in next.headers.entries)
@@ -725,6 +736,7 @@ Json serverSummary(ServerRuntime r, {bool includeTools = false}) => {
   'status': r.status.name,
   'enabled': r.config.enabled,
   'auth': authModeOf(r.config),
+  'transport': r.config.transport.wire,
   'tools': r.tools.length,
   if (r.info != null) 'serverInfo': '${r.info!.name} ${r.info!.version}',
   if (r.error != null) 'error': r.error,
@@ -762,6 +774,15 @@ String _url(Object? value) {
     );
   }
   return url;
+}
+
+McpTransport _transport(Object? value) {
+  if (value == null) return McpTransport.auto;
+  final wanted = '$value'.trim().toLowerCase();
+  for (final t in McpTransport.values) {
+    if (t.wire == wanted) return t;
+  }
+  throw ToolArgError('"transport" must be one of ${_transports.join(', ')}.');
 }
 
 String _authMode(Object? value) {

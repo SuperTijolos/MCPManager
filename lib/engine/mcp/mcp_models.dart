@@ -2,6 +2,31 @@ import 'dart:convert';
 
 import '../core/json.dart';
 
+/// How to talk to an MCP server over HTTP.
+enum McpTransport {
+  /// Try Streamable HTTP, then the legacy HTTP+SSE transport.
+  auto('auto', 'Auto-detect'),
+
+  /// Current spec: POST JSON-RPC to one endpoint (replies as JSON or SSE).
+  streamableHttp('streamable-http', 'Streamable HTTP'),
+
+  /// Legacy 2024-11-05 spec: GET an SSE stream, POST to the endpoint it names.
+  sse('sse', 'Legacy SSE');
+
+  const McpTransport(this.wire, this.label);
+
+  /// Value stored on disk and accepted from the Operator.
+  final String wire;
+  final String label;
+
+  static McpTransport parse(Object? value) {
+    for (final t in values) {
+      if (t.wire == '$value') return t;
+    }
+    return McpTransport.auto;
+  }
+}
+
 class McpServerConfig {
   const McpServerConfig({
     required this.id,
@@ -12,6 +37,7 @@ class McpServerConfig {
     this.oauth = false,
     this.oauthClientId,
     this.oauthScope,
+    this.transport = McpTransport.auto,
   });
 
   final String id;
@@ -31,6 +57,9 @@ class McpServerConfig {
   final String? oauthClientId;
   final String? oauthScope;
 
+  /// Which HTTP transport to use; `auto` detects it on connect.
+  final McpTransport transport;
+
   /// A manually configured `Authorization` header (bearer-token mode).
   bool get hasStaticAuthorization =>
       headers.keys.any((k) => k.toLowerCase() == 'authorization');
@@ -44,6 +73,7 @@ class McpServerConfig {
     String? oauthClientId,
     String? oauthScope,
     bool clearOAuthOptions = false,
+    McpTransport? transport,
   }) => McpServerConfig(
     id: id,
     name: name ?? this.name,
@@ -55,6 +85,7 @@ class McpServerConfig {
         ? null
         : oauthClientId ?? this.oauthClientId,
     oauthScope: clearOAuthOptions ? null : oauthScope ?? this.oauthScope,
+    transport: transport ?? this.transport,
   );
 
   Json toJson() => {
@@ -66,6 +97,7 @@ class McpServerConfig {
     'oauth': oauth,
     'oauthClientId': ?oauthClientId,
     'oauthScope': ?oauthScope,
+    'transport': transport.wire,
   };
 
   factory McpServerConfig.fromJson(Json json) => McpServerConfig(
@@ -79,6 +111,7 @@ class McpServerConfig {
     oauth: json['oauth'] as bool? ?? false,
     oauthClientId: json['oauthClientId'] as String?,
     oauthScope: json['oauthScope'] as String?,
+    transport: McpTransport.parse(json['transport']),
   );
 }
 

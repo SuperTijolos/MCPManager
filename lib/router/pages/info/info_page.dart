@@ -34,7 +34,7 @@ class InfoPage extends StatelessWidget {
           ),
           section(
             'Servers vs. tools',
-            'A server is a downstream MCP integration reached over Streamable HTTP. '
+            'A server is a downstream MCP integration reached over Streamable HTTP or the older HTTP+SSE transport (detected automatically). '
                 'Its tools are discovered on connect and can be run from the Tools '
                 'workbench or by the Operator.',
           ),

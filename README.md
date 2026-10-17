@@ -9,7 +9,7 @@ This is a ground-up rewrite of the earlier Node/Next.js version (kept locally in
 | Page | |
 |---|---|
 | **Overview** | Servers online, tools, 24 h call volume per hour, error rate, latency (avg / p95), busiest tools, model reachability check. |
-| **Servers** | Add/edit/remove MCP servers (Streamable HTTP, JSON or SSE replies), bearer token and custom headers, live status, protocol and latency, reconnect. |
+| **Servers** | Add/edit/remove MCP servers (Streamable HTTP or legacy HTTP+SSE, detected automatically), bearer token / OAuth and custom headers, live status, protocol and latency, reconnect. |
 | **Tools** | Browse and search every discovered tool, read its schema, edit a generated argument template and run it from a test bench. |
 | **Operator** | Chat with the model. It can manage servers (add, change, remove, enable, reconnect), read tool schemas, search the audit log, switch models, and run your servers' tools. Streams text and reasoning, shows each call as a card, remembers the conversation across reloads. |
 | **Audit** | Every tool call and connection, filterable, with redacted arguments/results, actor and approval mode. Copy as JSON. |
@@ -55,7 +55,16 @@ Other endpoints: add an **OpenAI-compatible** provider (vLLM, LM Studio, llama.c
 
 ### Connecting MCP servers
 
-Servers must speak **Streamable HTTP**. Because the app runs in a browser, each server must also allow CORS for the app's origin, accept the `Authorization`, `Mcp-Session-Id` and `MCP-Protocol-Version` request headers, and expose `Mcp-Session-Id` in `Access-Control-Expose-Headers`. A network error is reported with that hint, since a browser can't tell "refused" from "blocked by CORS".
+Two HTTP transports are supported and detected automatically (**Transport: Auto-detect**, changeable per server):
+
+- **Streamable HTTP** (current spec): one endpoint, usually `/mcp`.
+- **Legacy HTTP+SSE** (spec 2024-11-05), still used by many servers and IDE bridges: the app opens `GET <url>` as an event stream, reads the `endpoint` event, and POSTs requests there. Its endpoint is usually `/sse`.
+
+If you enter a bare `host:port`, the app also tries `/mcp` and `/sse`, then remembers what worked (the card shows `…/sse` and an **SSE** badge). A URL ending in `/sse` goes straight to the legacy transport. A `401` stops the search and asks for credentials; any other failure lists every attempt it made. A message endpoint announced on a different origin is refused, so credentials are never sent elsewhere.
+
+Example: the **VS Code MCP Bridge** extension serves `http://127.0.0.1:3333/sse` and requires its `mcpServer.authToken` as a **bearer token**. Add `localhost:3333` (or the full `/sse` URL), choose **Bearer token** and paste the token.
+
+Because the app runs in a browser, each server must also allow CORS for the app's origin and accept the `Authorization` header (plus `Mcp-Session-Id` / `MCP-Protocol-Version` for Streamable HTTP, exposing `Mcp-Session-Id` in `Access-Control-Expose-Headers`). A network error is reported with that hint, since a browser can't tell "refused" from "blocked by CORS".
 
 #### OAuth-protected servers
 
@@ -74,7 +83,7 @@ lib/
   main.dart                  app bootstrap (env, prefs, providers)
   engine/                    no Flutter UI — all logic, unit-tested
     core/                    json, redaction, url normalising, env, prefs
-    mcp/                     Streamable HTTP client, server hub, schema → argument template
+    mcp/                     Streamable HTTP + legacy SSE clients, auto-detect, server hub, OAuth, schema → argument template
     llm/                     provider interface, Ollama + OpenAI-compatible, settings
     agent/                   tool-calling loop, toolbox, approval flow, chat controller
     audit/                   append-only log, stats
@@ -98,7 +107,6 @@ flutter build web
 ## Limits and not-yet-ported features
 
 - Browser build only: no stdio MCP servers, and the app can't host MCP endpoints itself.
-- Legacy HTTP+SSE MCP transport is not implemented (Streamable HTTP only).
 - OAuth sign-in needs a browser that allows pop-ups; the in-app preview browser of some tools doesn't.
 - Not ported from the Node version: portals (published gateway endpoints), policies and tool overrides, investigations, mind map, OAuth *login to this app* (OAuth to MCP servers is supported), Postgres/pgvector, OpenTelemetry.
 - Server tokens and provider API keys are kept in the browser's local storage, and the `.env` asset is downloadable by anyone who can load the app — don't put secrets there, and don't expose a deployed build that holds real credentials.
