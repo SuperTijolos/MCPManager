@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mcp_manager/engine/audit/audit_log.dart';
 import 'package:mcp_manager/engine/audit/audit_models.dart';
 import 'package:mcp_manager/engine/llm/llm_types.dart';
 import 'package:mcp_manager/engine/mcp/mcp_hub.dart';
@@ -58,6 +59,45 @@ void main() {
     expect(find.text('gemma4'), findsOneWidget);
   });
 
+  testWidgets('Overview replaces empty charts with useful actions', (
+    tester,
+  ) async {
+    await pumpApp(tester);
+    expect(find.text('Connect your first MCP server'), findsOneWidget);
+    expect(find.text('No tool calls in this period'), findsOneWidget);
+    expect(find.text('Quick actions'), findsOneWidget);
+    expect(find.text('Call outcomes'), findsNothing);
+    expect(find.text('Busiest tools · 24h'), findsNothing);
+    await tester.tap(find.text('Ask the Operator'));
+    await tester.pumpAndSettle();
+    expect(find.text('Operator'), findsWidgets);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Overview shows graphs once tool calls are recorded', (
+    tester,
+  ) async {
+    final container = await pumpApp(tester);
+    container
+        .read(auditLogProvider.notifier)
+        .record(
+          kind: AuditKind.toolCall,
+          status: AuditStatus.success,
+          source: AuditSource.workbench,
+          actor: 'user',
+          serverName: 'Example',
+          toolName: 'lookup',
+          durationMs: 45,
+        );
+    await tester.pumpAndSettle();
+    expect(find.text('Call outcomes'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('Busiest tools · 24h'), 180);
+    expect(find.text('Busiest tools · 24h'), findsOneWidget);
+    expect(find.text('Quick actions'), findsNothing);
+    expect(find.text('No tool calls in this period'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('Overview scrollbar stays outside cards', (tester) async {
     await pumpApp(tester, size: const Size(1280, 650));
     final overview = find.byType(OverviewPage);
@@ -67,7 +107,7 @@ void main() {
     );
     expect(scrollbar, findsOneWidget);
     final outcomesCard = find
-        .ancestor(of: find.text('Call outcomes'), matching: find.byType(Card))
+        .ancestor(of: find.text('Quick actions'), matching: find.byType(Card))
         .first;
     final cardRight = tester.getTopRight(outcomesCard).dx;
     final gutterRight = tester.getTopRight(scrollbar).dx;

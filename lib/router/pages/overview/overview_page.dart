@@ -109,28 +109,13 @@ class _OverviewPageState extends ConsumerState<OverviewPage> {
             kPagePadding,
           ),
           children: [
-            if (hub.servers.isEmpty) ...[
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Wrap(
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    alignment: WrapAlignment.spaceBetween,
-                    spacing: 12,
-                    runSpacing: 8,
-                    children: [
-                      const Text('Start by connecting your first MCP server.'),
-                      FilledButton.icon(
-                        onPressed: () => context.go('/servers'),
-                        icon: const Icon(Icons.add),
-                        label: const Text('Add server'),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-            ],
+            _WorkspaceBanner(
+              connected: connected,
+              enabled: enabled.length,
+              toolCount: hub.availableTools.length,
+              modelReady: settings.isReady,
+            ),
+            const SizedBox(height: 16),
             if (attention.isNotEmpty) ...[
               _AttentionCard(attention),
               const SizedBox(height: 16),
@@ -219,7 +204,11 @@ class _OverviewPageState extends ConsumerState<OverviewPage> {
                   window: _window,
                   onChange: (value) => setState(() => _window = value),
                 );
-                final outcome = _OutcomesPanel(stats);
+                final outcome = stats.total == 0
+                    ? _QuickActionsPanel(
+                        hasTools: hub.availableTools.isNotEmpty,
+                      )
+                    : _OutcomesPanel(stats);
                 return constraints.maxWidth >= 850
                     ? Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -254,24 +243,31 @@ class _OverviewPageState extends ConsumerState<OverviewPage> {
               },
             ),
             const SizedBox(height: 16),
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final recent = _RecentEvents(events.take(6).toList());
-                final tools = _TopTools(stats.topTools, window: _window.label);
-                return constraints.maxWidth >= 850
-                    ? Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(flex: 7, child: recent),
-                          const SizedBox(width: 16),
-                          Expanded(flex: 3, child: tools),
-                        ],
-                      )
-                    : Column(
-                        children: [recent, const SizedBox(height: 16), tools],
-                      );
-              },
-            ),
+            if (events.isNotEmpty || stats.total > 0) ...[
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final recent = _RecentEvents(events.take(6).toList());
+                  if (stats.total == 0) return recent;
+                  final tools = _TopTools(
+                    stats.topTools,
+                    window: _window.label,
+                  );
+                  return constraints.maxWidth >= 850
+                      ? Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(flex: 7, child: recent),
+                            const SizedBox(width: 16),
+                            Expanded(flex: 3, child: tools),
+                          ],
+                        )
+                      : Column(
+                          children: [recent, const SizedBox(height: 16), tools],
+                        );
+                },
+              ),
+              const SizedBox(height: 16),
+            ],
             const SizedBox(height: 12),
             Text(
               'Statistics are based on locally retained audit records '
@@ -279,6 +275,239 @@ class _OverviewPageState extends ConsumerState<OverviewPage> {
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _WorkspaceBanner extends StatelessWidget {
+  const _WorkspaceBanner({
+    required this.connected,
+    required this.enabled,
+    required this.toolCount,
+    required this.modelReady,
+  });
+
+  final int connected;
+  final int enabled;
+  final int toolCount;
+  final bool modelReady;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final noServers = enabled == 0;
+    final allOnline = !noServers && connected == enabled;
+    final tint = noServers
+        ? StatusColors.info
+        : allOnline
+        ? StatusColors.ok
+        : StatusColors.warn;
+    final headline = noServers
+        ? 'Connect your first MCP server'
+        : allOnline
+        ? 'Workspace ready'
+        : 'Some connections need attention';
+    final summary = noServers
+        ? 'Add a server to discover tools and start using your Operator.'
+        : '$connected of $enabled servers connected · $toolCount tools ready'
+              ' · Operator ${modelReady ? 'configured' : 'not configured'}';
+
+    final actions = Wrap(
+      spacing: 10,
+      runSpacing: 8,
+      children: [
+        FilledButton.tonalIcon(
+          onPressed: () => context.go(noServers ? '/servers' : '/tools'),
+          icon: Icon(
+            noServers ? Icons.add_rounded : Icons.build_outlined,
+            size: 18,
+          ),
+          label: Text(noServers ? 'Add server' : 'Browse tools'),
+        ),
+        OutlinedButton.icon(
+          onPressed: () => context.go(modelReady ? '/chat' : '/settings'),
+          icon: Icon(
+            modelReady ? Icons.smart_toy_outlined : Icons.tune_outlined,
+            size: 18,
+          ),
+          label: Text(modelReady ? 'Open Operator' : 'Configure Operator'),
+        ),
+      ],
+    );
+
+    return Card(
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          gradient: LinearGradient(
+            colors: [
+              tint.withValues(alpha: 0.10),
+              theme.colorScheme.surfaceContainer.withValues(alpha: 0.14),
+            ],
+            begin: Alignment.centerLeft,
+            end: Alignment.centerRight,
+          ),
+        ),
+        padding: const EdgeInsets.all(16),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final info = Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 46,
+                  height: 46,
+                  decoration: BoxDecoration(
+                    color: tint.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(13),
+                  ),
+                  child: Icon(
+                    noServers
+                        ? Icons.hub_outlined
+                        : allOnline
+                        ? Icons.hub_rounded
+                        : Icons.warning_amber_rounded,
+                    color: tint,
+                    size: 25,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Flexible(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        headline,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        summary,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            );
+            if (constraints.maxWidth < 800) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [info, const SizedBox(height: 14), actions],
+              );
+            }
+            return Row(
+              children: [
+                Expanded(child: info),
+                const SizedBox(width: 12),
+                actions,
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _QuickActionsPanel extends StatelessWidget {
+  const _QuickActionsPanel({required this.hasTools});
+  final bool hasTools;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Quick actions', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 10),
+          _QuickAction(
+            icon: hasTools ? Icons.build_outlined : Icons.add_circle_outline,
+            title: hasTools ? 'Try a tool' : 'Connect a server',
+            subtitle: hasTools
+                ? 'Run a connected MCP tool'
+                : 'Discover tools from an endpoint',
+            route: hasTools ? '/tools' : '/servers',
+          ),
+          const Divider(height: 1),
+          const _QuickAction(
+            icon: Icons.smart_toy_outlined,
+            title: 'Ask the Operator',
+            subtitle: 'Use your tools through chat',
+            route: '/chat',
+          ),
+          const Divider(height: 1),
+          const _QuickAction(
+            icon: Icons.receipt_long_outlined,
+            title: 'Inspect audit log',
+            subtitle: 'See connections and approvals',
+            route: '/audit',
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _QuickAction extends StatelessWidget {
+  const _QuickAction({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.route,
+  });
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final String route;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: () => context.go(route),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 2),
+        child: Row(
+          children: [
+            Icon(icon, color: theme.colorScheme.primary, size: 19),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 6),
+            Icon(
+              Icons.chevron_right_rounded,
+              size: 18,
+              color: theme.colorScheme.onSurfaceVariant,
             ),
           ],
         ),
@@ -399,20 +628,56 @@ class _ActivityPanel extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: 10),
-            const _Legend(),
-            const SizedBox(height: 18),
-            SizedBox(
-              height: 222,
-              child: stats.total == 0
-                  ? const Center(
-                      child: Text(
-                        'No tool calls in this period.\nRun a tool or ask the Operator.',
-                        textAlign: TextAlign.center,
+            const SizedBox(height: 14),
+            if (stats.total == 0)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 20,
+                ),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest
+                      .withValues(alpha: 0.32),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.query_stats_rounded,
+                      size: 28,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'No tool calls in this period',
+                            style: Theme.of(context).textTheme.titleSmall,
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            'Run a tool to start tracking activity, latency and errors.',
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurfaceVariant,
+                                ),
+                          ),
+                        ],
                       ),
-                    )
-                  : _HourlyChart(buckets),
-            ),
+                    ),
+                  ],
+                ),
+              )
+            else ...[
+              const _Legend(),
+              const SizedBox(height: 18),
+              SizedBox(height: 222, child: _HourlyChart(buckets)),
+            ],
           ],
         ),
       ),
