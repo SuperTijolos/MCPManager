@@ -115,6 +115,58 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('Overview desktop cards do not leave row-height gaps', (
+    tester,
+  ) async {
+    await pumpApp(tester, size: const Size(1600, 950));
+    Finder panel(String heading) => find
+        .ancestor(of: find.text(heading), matching: find.byType(Card))
+        .first;
+
+    final activityBottom = tester.getBottomLeft(panel('Tool activity')).dy;
+    final connectionsTop = tester.getTopLeft(panel('Connection status')).dy;
+    final actionsBottom = tester.getBottomLeft(panel('Quick actions')).dy;
+    final operatorTop = tester.getTopLeft(panel('Operator model')).dy;
+
+    // Both columns independently stack cards with the standard 16px gap.
+    expect(connectionsTop - activityBottom, closeTo(16, 1));
+    expect(operatorTop - actionsBottom, closeTo(16, 1));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Overview activity panels stay compact with recorded calls', (
+    tester,
+  ) async {
+    final container = await pumpApp(tester, size: const Size(1600, 950));
+    container
+        .read(auditLogProvider.notifier)
+        .record(
+          kind: AuditKind.toolCall,
+          status: AuditStatus.success,
+          source: AuditSource.workbench,
+          actor: 'user',
+          serverName: 'Example',
+          toolName: 'lookup',
+          durationMs: 45,
+        );
+    await tester.pumpAndSettle();
+
+    Finder panel(String heading) => find
+        .ancestor(of: find.text(heading), matching: find.byType(Card))
+        .first;
+
+    final connectionsBottom = tester
+        .getBottomLeft(panel('Connection status'))
+        .dy;
+    final activityTop = tester.getTopLeft(panel('Recent activity')).dy;
+    final outcomesBottom = tester.getBottomLeft(panel('Call outcomes')).dy;
+    final operatorTop = tester.getTopLeft(panel('Operator model')).dy;
+
+    expect(activityTop - connectionsBottom, closeTo(16, 1));
+    expect(operatorTop - outcomesBottom, closeTo(16, 1));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('Overview time selector updates analytics', (tester) async {
     await pumpApp(tester);
     expect(find.text('Tool calls · 24h'), findsOneWidget);

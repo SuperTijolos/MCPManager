@@ -197,6 +197,9 @@ class _OverviewPageState extends ConsumerState<OverviewPage> {
               },
             ),
             const SizedBox(height: 16),
+            // Independent columns keep cards directly below each other.
+            // Pairing differently sized cards in Rows created blank bands on
+            // the shorter side of each row.
             LayoutBuilder(
               builder: (context, constraints) {
                 final chart = _ActivityPanel(
@@ -209,65 +212,73 @@ class _OverviewPageState extends ConsumerState<OverviewPage> {
                         hasTools: hub.availableTools.isNotEmpty,
                       )
                     : _OutcomesPanel(stats);
-                return constraints.maxWidth >= 850
-                    ? Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(flex: 7, child: chart),
-                          const SizedBox(width: 16),
-                          Expanded(flex: 3, child: outcome),
-                        ],
-                      )
-                    : Column(
-                        children: [chart, const SizedBox(height: 16), outcome],
-                      );
-              },
-            ),
-            const SizedBox(height: 16),
-            LayoutBuilder(
-              builder: (context, constraints) {
                 final servers = _ServerHealthPanel(hub.servers);
                 final model = _ModelCard(settings: settings);
-                return constraints.maxWidth >= 850
-                    ? Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                final recent = events.isNotEmpty
+                    ? _RecentEvents(events.take(6).toList())
+                    : null;
+                final tools = stats.total > 0
+                    ? _TopTools(stats.topTools, window: _window.label)
+                    : null;
+
+                if (constraints.maxWidth < 850) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      chart,
+                      const SizedBox(height: 16),
+                      outcome,
+                      const SizedBox(height: 16),
+                      servers,
+                      const SizedBox(height: 16),
+                      model,
+                      if (recent != null) ...[
+                        const SizedBox(height: 16),
+                        recent,
+                      ],
+                      if (tools != null) ...[const SizedBox(height: 16), tools],
+                    ],
+                  );
+                }
+
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      flex: 7,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          Expanded(flex: 7, child: servers),
-                          const SizedBox(width: 16),
-                          Expanded(flex: 3, child: model),
+                          chart,
+                          const SizedBox(height: 16),
+                          servers,
+                          if (recent != null) ...[
+                            const SizedBox(height: 16),
+                            recent,
+                          ],
                         ],
-                      )
-                    : Column(
-                        children: [servers, const SizedBox(height: 16), model],
-                      );
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      flex: 3,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          outcome,
+                          const SizedBox(height: 16),
+                          model,
+                          if (tools != null) ...[
+                            const SizedBox(height: 16),
+                            tools,
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
+                );
               },
             ),
-            const SizedBox(height: 16),
-            if (events.isNotEmpty || stats.total > 0) ...[
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  final recent = _RecentEvents(events.take(6).toList());
-                  if (stats.total == 0) return recent;
-                  final tools = _TopTools(
-                    stats.topTools,
-                    window: _window.label,
-                  );
-                  return constraints.maxWidth >= 850
-                      ? Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(flex: 7, child: recent),
-                            const SizedBox(width: 16),
-                            Expanded(flex: 3, child: tools),
-                          ],
-                        )
-                      : Column(
-                          children: [recent, const SizedBox(height: 16), tools],
-                        );
-                },
-              ),
-              const SizedBox(height: 16),
-            ],
             const SizedBox(height: 12),
             Text(
               'Statistics are based on locally retained audit records '
