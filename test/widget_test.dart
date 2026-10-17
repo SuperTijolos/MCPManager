@@ -2,50 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mcp_manager/engine/audit/audit_models.dart';
-import 'package:mcp_manager/engine/core/prefs.dart';
-import 'package:mcp_manager/engine/llm/llm_settings.dart';
 import 'package:mcp_manager/engine/llm/llm_types.dart';
 import 'package:mcp_manager/engine/mcp/mcp_hub.dart';
-import 'package:mcp_manager/engine/mcp/oauth/oauth_service.dart';
 import 'package:mcp_manager/main.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
+import 'support/app_harness.dart';
 import 'support/fakes.dart';
-
-Future<void> _pumpApp(
-  WidgetTester tester, {
-  FakeMcpServer? server,
-  ScriptedLlm? llm,
-  FakeOAuthWorld? oauth,
-  Size size = const Size(1280, 900),
-}) async {
-  tester.view.physicalSize = size;
-  tester.view.devicePixelRatio = 1;
-  addTearDown(tester.view.reset);
-
-  SharedPreferences.setMockInitialValues({});
-  final prefs = await SharedPreferences.getInstance();
-  await tester.pumpWidget(
-    ProviderScope(
-      overrides: [
-        sharedPreferencesProvider.overrideWithValue(prefs),
-        oauthRedirectUriProvider.overrideWithValue(Uri.parse(oauthRedirect)),
-        if (oauth != null) ...[
-          mcpHttpClientFactoryProvider.overrideWithValue(() => oauth.client),
-          oauthPopupOpenerProvider.overrideWithValue(
-            () => FakePopup.approving(oauth),
-          ),
-        ],
-        if (server != null)
-          mcpHttpClientFactoryProvider.overrideWithValue(() => server.client),
-        if (llm != null)
-          llmProviderFactoryProvider.overrideWithValue((_) => llm),
-      ],
-      child: const MCPManagerApp(),
-    ),
-  );
-  await tester.pumpAndSettle();
-}
 
 final _tools = [
   {
@@ -84,7 +46,7 @@ void main() {
   testWidgets('boots on the overview with empty-state guidance', (
     tester,
   ) async {
-    await _pumpApp(tester);
+    await pumpApp(tester);
 
     expect(find.text('Overview'), findsWidgets);
     expect(find.text('Servers online'), findsOneWidget);
@@ -100,7 +62,7 @@ void main() {
   testWidgets('add-server form validates, then connects and lists the server', (
     tester,
   ) async {
-    await _pumpApp(tester, server: FakeMcpServer(tools: _tools));
+    await pumpApp(tester, server: FakeMcpServer(tools: _tools));
 
     await tester.tap(find.text('Servers').first);
     await tester.pumpAndSettle();
@@ -141,7 +103,7 @@ void main() {
       tools: _tools,
       handlers: {'lookup': (args) => textResult('found ${args['q']}')},
     );
-    await _pumpApp(tester, server: server);
+    await pumpApp(tester, server: server);
     await _addDemoServer(tester);
 
     await tester.tap(find.text('Tools').first);
@@ -181,7 +143,7 @@ void main() {
         ],
         [const LlmTextDelta('Understood, I left it alone.'), const LlmDone()],
       ]);
-      await _pumpApp(tester, server: server, llm: llm);
+      await pumpApp(tester, server: server, llm: llm);
       await _addDemoServer(tester);
 
       await tester.tap(find.text('Operator').first);
@@ -206,7 +168,7 @@ void main() {
   testWidgets('narrow screens use a drawer instead of the rail', (
     tester,
   ) async {
-    await _pumpApp(tester, size: const Size(400, 800));
+    await pumpApp(tester, size: const Size(400, 800));
 
     expect(find.byType(NavigationRail), findsNothing);
     await tester.tap(find.byTooltip('Open navigation menu'));
@@ -216,14 +178,17 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Model providers for the Operator'), findsOneWidget);
+    expect(
+      find.text('Providers and the model the Operator runs on'),
+      findsOneWidget,
+    );
     expect(find.text('Using Ollama from the browser'), findsOneWidget);
   });
 
   testWidgets(
     'settings lists the default Gemma 4 provider and its enabled model',
     (tester) async {
-      await _pumpApp(tester);
+      await pumpApp(tester);
       await tester.tap(find.text('Settings').first);
       await tester.pumpAndSettle();
 
@@ -245,7 +210,7 @@ void main() {
       tools: _tools,
       handlers: {'lookup': (args) => textResult('found ${args['q']}')},
     );
-    await _pumpApp(tester, server: server, size: const Size(360, 740));
+    await pumpApp(tester, server: server, size: const Size(360, 740));
 
     // Seed realistic content: a connected server, an audit event, a chat turn.
     final container = ProviderScope.containerOf(
@@ -290,7 +255,7 @@ void main() {
   testWidgets(
     'OAuth mode shows the redirect URI to allow and the ChatGPT caveat',
     (tester) async {
-      await _pumpApp(tester);
+      await pumpApp(tester);
       await tester.tap(find.text('Servers').first);
       await tester.pumpAndSettle();
       await tester.tap(find.text('Add your first server'));
@@ -330,7 +295,7 @@ void main() {
     tester,
   ) async {
     final world = FakeOAuthWorld(mcp: FakeMcpServer(tools: _tools));
-    await _pumpApp(tester, oauth: world);
+    await pumpApp(tester, oauth: world);
 
     await tester.tap(find.text('Servers').first);
     await tester.pumpAndSettle();
@@ -387,7 +352,7 @@ void main() {
         ],
         [const LlmTextDelta('Added. Please sign in.'), const LlmDone()],
       ]);
-      await _pumpApp(tester, oauth: world, llm: llm);
+      await pumpApp(tester, oauth: world, llm: llm);
 
       await tester.tap(find.text('Operator').first);
       await tester.pumpAndSettle();

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../audit/audit_log.dart';
@@ -31,6 +33,7 @@ class ServerRuntime {
     this.latencyMs,
     this.checkedAt,
     this.authChallenge,
+    this.trace = const [],
   });
 
   final McpServerConfig config;
@@ -45,6 +48,9 @@ class ServerRuntime {
   /// metadata when the user signs in.
   final String? authChallenge;
 
+  /// Requests and statuses of the last connection attempt, for diagnosis.
+  final List<String> trace;
+
   ServerRuntime copyWith({
     McpServerConfig? config,
     ServerStatus? status,
@@ -55,6 +61,7 @@ class ServerRuntime {
     int? latencyMs,
     DateTime? checkedAt,
     String? authChallenge,
+    List<String>? trace,
   }) => ServerRuntime(
     config: config ?? this.config,
     status: status ?? this.status,
@@ -64,6 +71,7 @@ class ServerRuntime {
     latencyMs: latencyMs ?? this.latencyMs,
     checkedAt: checkedAt ?? this.checkedAt,
     authChallenge: clearError ? null : authChallenge ?? this.authChallenge,
+    trace: trace ?? this.trace,
   );
 }
 
@@ -71,6 +79,34 @@ class ToolRef {
   const ToolRef(this.server, this.tool);
   final McpServerConfig server;
   final McpTool tool;
+}
+
+/// What a trial connection found, without saving anything.
+class ProbeResult {
+  const ProbeResult({
+    this.connected = false,
+    this.needsAuth = false,
+    this.error,
+    this.info,
+    this.toolCount = 0,
+    this.transport,
+    this.endpoint,
+    this.latencyMs,
+    this.trace = const [],
+  });
+
+  /// The handshake and tool listing both worked.
+  final bool connected;
+
+  /// The server answered but wants credentials (so it is reachable).
+  final bool needsAuth;
+  final String? error;
+  final McpServerInfo? info;
+  final int toolCount;
+  final McpTransport? transport;
+  final String? endpoint;
+  final int? latencyMs;
+  final List<String> trace;
 }
 
 class McpHubState {
@@ -253,6 +289,7 @@ class McpHub extends Notifier<McpHubState> {
           latencyMs: watch.elapsedMilliseconds,
           checkedAt: DateTime.now(),
           clearError: true,
+          trace: client.trace,
         ),
       );
       if (detected) _persist();
@@ -298,11 +335,13 @@ class McpHub extends Notifier<McpHubState> {
     String? challenge,
   }) {
     watch.stop();
+    final trace = client.trace;
     client.close();
     if (!ref.mounted) return;
     _setRuntime(
       id,
       (r) => r.copyWith(
+        trace: trace,
         status: needsAuth ? ServerStatus.needsAuth : ServerStatus.error,
         error: message,
         tools: const [],
@@ -322,6 +361,52 @@ class McpHub extends Notifier<McpHubState> {
           durationMs: watch.elapsedMilliseconds,
           error: redactText(message),
         );
+  }
+
+  /// Tries [config] without saving it or touching the audit log: connects,
+  /// lists tools, disconnects. Used by "Test connection" in the server dialog.
+  /// [signedInAs] lets an existing OAuth server reuse its stored sign-in.
+  Future<ProbeResult> probe(
+    McpServerConfig config, {
+    String? signedInAs,
+  }) async {
+    final oauth = ref.read(oauthServiceProvider);
+    final client = createMcpConnection(
+      config,
+      httpClient: ref.read(mcpHttpClientFactoryProvider)(),
+      tokenProvider: config.oauth && signedInAs != null
+          ? ({bool forceRefresh = false}) =>
+                oauth.accessToken(signedInAs, forceRefresh: forceRefresh)
+          : null,
+    );
+    final watch = Stopwatch()..start();
+    try {
+      final info = await client.connect();
+      final tools = await client.listTools();
+      watch.stop();
+      return ProbeResult(
+        connected: true,
+        info: info,
+        toolCount: tools.length,
+        transport: client.transport,
+        endpoint: client.endpointUrl,
+        latencyMs: watch.elapsedMilliseconds,
+        trace: client.trace,
+      );
+    } on McpAuthRequired catch (e) {
+      return ProbeResult(
+        needsAuth: true,
+        error: e.message,
+        endpoint: client.endpointUrl,
+        trace: client.trace,
+      );
+    } on McpException catch (e) {
+      return ProbeResult(error: e.message, trace: client.trace);
+    } catch (e) {
+      return ProbeResult(error: '$e', trace: client.trace);
+    } finally {
+      client.close();
+    }
   }
 
   /// Signs in to [id] with OAuth using [popup] (opened by the caller inside a
@@ -416,10 +501,21 @@ class McpHub extends Notifier<McpHubState> {
     required AuditSource source,
     required String actor,
     String? approval,
+    Json? clientArgs,
+    Json? context,
   }) async {
     final runtime = state.byId(serverId);
     final audit = ref.read(auditLogProvider.notifier);
-    final argsPreview = redactedPreview(args);
+    // [args] is what goes to the server. When rules reshaped the call,
+    // [clientArgs] is what the model sent and [context] its audit-only values.
+    final argsPreview = redactedPreview(clientArgs ?? args);
+    final forwardedPreview =
+        clientArgs != null && jsonEncode(clientArgs) != jsonEncode(args)
+        ? redactedPreview(args)
+        : null;
+    final contextPreview = context == null || context.isEmpty
+        ? null
+        : redactedPreview(context);
     final client = _clients[serverId];
 
     // A legacy-SSE connection whose stream dropped reconnects by itself on use.
@@ -434,6 +530,8 @@ class McpHub extends Notifier<McpHubState> {
         serverName: runtime?.config.name,
         toolName: toolName,
         args: argsPreview,
+        forwarded: forwardedPreview,
+        context: contextPreview,
         error: message,
         approval: approval,
       );
@@ -455,6 +553,8 @@ class McpHub extends Notifier<McpHubState> {
         toolName: toolName,
         durationMs: watch.elapsedMilliseconds,
         args: argsPreview,
+        forwarded: forwardedPreview,
+        context: contextPreview,
         result: redactedPreview(result.text),
         error: result.isError ? redactedPreview(result.text, max: 500) : null,
         approval: approval,
@@ -473,6 +573,8 @@ class McpHub extends Notifier<McpHubState> {
         toolName: toolName,
         durationMs: watch.elapsedMilliseconds,
         args: argsPreview,
+        forwarded: forwardedPreview,
+        context: contextPreview,
         error: redactText(e.message),
         approval: approval,
       );

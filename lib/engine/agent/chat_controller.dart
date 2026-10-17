@@ -7,11 +7,13 @@ import '../core/json.dart';
 import '../core/prefs.dart';
 import '../llm/llm_settings.dart';
 import '../llm/llm_types.dart';
+import '../settings/app_settings.dart';
+import 'chat_store.dart';
 import 'agent_tool.dart';
 import 'operator_agent.dart';
+import 'tool_insight.dart';
 import 'toolbox.dart';
 
-const _storageKey = 'mcpm.chat.v1';
 const _maxStoredItems = 80;
 const _maxStoredOutput = 4000;
 
@@ -161,12 +163,34 @@ class ErrorItem extends ChatItem {
 }
 
 class ChatState {
-  const ChatState({this.items = const [], this.running = false});
+  const ChatState({
+    this.items = const [],
+    this.running = false,
+    this.conversations = const [],
+    this.activeId,
+  });
+
   final List<ChatItem> items;
   final bool running;
 
-  ChatState copyWith({List<ChatItem>? items, bool? running}) =>
-      ChatState(items: items ?? this.items, running: running ?? this.running);
+  /// Saved conversations, most recently used first.
+  final List<ConversationMeta> conversations;
+
+  /// The open conversation; null until the first message of a new one.
+  final String? activeId;
+
+  ChatState copyWith({
+    List<ChatItem>? items,
+    bool? running,
+    List<ConversationMeta>? conversations,
+    String? activeId,
+    bool clearActive = false,
+  }) => ChatState(
+    items: items ?? this.items,
+    running: running ?? this.running,
+    conversations: conversations ?? this.conversations,
+    activeId: clearActive ? null : activeId ?? this.activeId,
+  );
 }
 
 final chatControllerProvider = NotifierProvider<ChatController, ChatState>(
@@ -180,27 +204,36 @@ class ChatController extends Notifier<ChatState> {
   bool _cancelled = false;
   int _runToken = 0;
 
+  ChatStore get _store => ChatStore(ref.read(sharedPreferencesProvider));
+
   @override
   ChatState build() {
     ref.onDispose(() {
       _cancelled = true;
       _resolveAll(ApprovalDecision.deny);
     });
-    return _restore();
+    final store = _store;
+    final conversations = store.migrateLegacy(
+      store.index(),
+      () => newId('chat'),
+    );
+    final activeId = store.activeId();
+    if (activeId != null && conversations.any((c) => c.id == activeId)) {
+      return _load(activeId, conversations);
+    }
+    return ChatState(conversations: conversations);
   }
 
-  ChatState _restore() {
-    final raw = readJson(ref.read(sharedPreferencesProvider), _storageKey);
-    if (raw is! Map) return const ChatState();
+  ChatState _load(String id, List<ConversationMeta> conversations) {
+    _history.clear();
+    _sessionAllowed.clear();
+    final stored = _store.load(id);
+    if (stored == null) return ChatState(conversations: conversations);
     final items = <ChatItem>[
-      for (final i in (raw['items'] as List?) ?? const [])
-        ?ChatItem.fromJson((i as Map).cast<String, dynamic>()),
+      for (final i in stored.items) ?ChatItem.fromJson(i),
     ];
     try {
-      _history.addAll([
-        for (final m in (raw['history'] as List?) ?? const [])
-          LlmMessage.fromJson((m as Map).cast<String, dynamic>()),
-      ]);
+      _history.addAll([for (final m in stored.history) LlmMessage.fromJson(m)]);
     } catch (_) {
       _history.clear();
     }
@@ -214,10 +247,14 @@ class ChatController extends Notifier<ChatState> {
       if (consistent) break;
       _history.removeLast();
     }
-    return ChatState(items: items);
+    return ChatState(items: items, conversations: conversations, activeId: id);
   }
 
+  /// Saves the open conversation and updates the history list.
   void _persist() {
+    if (state.items.isEmpty) return;
+    final store = _store;
+    final id = state.activeId ?? newId('chat');
     final items = state.items.length > _maxStoredItems
         ? state.items.sublist(state.items.length - _maxStoredItems)
         : state.items;
@@ -229,10 +266,97 @@ class ChatController extends Notifier<ChatState> {
     while (history.isNotEmpty && history.first.role != LlmRole.user) {
       history.removeAt(0);
     }
-    writeJson(ref.read(sharedPreferencesProvider), _storageKey, {
-      'items': [for (final i in items) i.toJson()],
-      'history': [for (final m in history) m.toJson()],
-    });
+    store.save(
+      id,
+      StoredConversation(
+        items: [for (final i in items) i.toJson()],
+        history: [for (final m in history) m.toJson()],
+      ),
+    );
+
+    final now = DateTime.now();
+    final prompts = state.items.whereType<UserItem>().toList();
+    final existing = state.conversations.where((c) => c.id == id).firstOrNull;
+    final meta =
+        (existing ??
+                ConversationMeta(
+                  id: id,
+                  title: titleFromPrompt(
+                    prompts.isEmpty ? '' : prompts.first.text,
+                  ),
+                  createdAt: now,
+                  updatedAt: now,
+                ))
+            .copyWith(updatedAt: now, messageCount: prompts.length);
+    var list = [meta, ...state.conversations.where((c) => c.id != id)];
+    // Keep the list bounded, dropping the least recently used conversations.
+    while (list.length > maxConversations) {
+      store.delete(list.removeLast().id);
+    }
+    store.saveIndex(list);
+    store.setActive(id);
+    state = state.copyWith(conversations: list, activeId: id);
+  }
+
+  /// Starts a fresh, empty conversation. The current one stays in the history.
+  void newConversation() {
+    if (state.running) stop();
+    _runToken++;
+    _history.clear();
+    _sessionAllowed.clear();
+    _store.setActive(null);
+    state = ChatState(conversations: state.conversations);
+  }
+
+  /// Switches to a saved conversation, stopping any run in progress.
+  void open(String id) {
+    if (id == state.activeId) return;
+    if (!state.conversations.any((c) => c.id == id)) return;
+    if (state.running) stop();
+    _runToken++;
+    _store.setActive(id);
+    state = _load(id, state.conversations);
+  }
+
+  void rename(String id, String title) {
+    final t = title.trim();
+    if (t.isEmpty) return;
+    final list = [
+      for (final c in state.conversations)
+        if (c.id == id) c.copyWith(title: t) else c,
+    ];
+    _store.saveIndex(list);
+    state = state.copyWith(conversations: list);
+  }
+
+  void delete(String id) {
+    final wasActive = id == state.activeId;
+    _store.delete(id);
+    final list = [
+      for (final c in state.conversations)
+        if (c.id != id) c,
+    ];
+    _store.saveIndex(list);
+    if (wasActive) {
+      if (state.running) stop();
+      _runToken++;
+      _history.clear();
+      _sessionAllowed.clear();
+      _store.setActive(null);
+      state = ChatState(conversations: list);
+    } else {
+      state = state.copyWith(conversations: list);
+    }
+  }
+
+  /// Deletes every saved conversation.
+  void deleteAll() {
+    for (final c in state.conversations) {
+      _store.delete(c.id);
+    }
+    _store.saveIndex(const []);
+    newConversation();
+    state = const ChatState();
   }
 
   Future<void> send(String text) async {
@@ -262,16 +386,24 @@ class ChatController extends Notifier<ChatState> {
       items: [...state.items, UserItem(newId('u'), prompt)],
       running: true,
     );
+    // Save right away so the conversation shows up in the history even if
+    // the page is closed before the model answers.
+    _persist();
     _append(AssistantItem(newId('a')));
 
     final provider = ref.read(llmProviderFactoryProvider)(config);
+    final toolbox = buildToolboxWithInsight(ref);
     final agent = OperatorAgent(
       provider: provider,
       model: model,
-      tools: buildToolbox(ref),
+      tools: toolbox.tools,
+      capabilityMap: buildCapabilityMap(toolbox.index),
+      advisor: ToolAdvisor(toolbox.index),
       requestApproval: _askApproval,
       isCancelled: () => _cancelled || token != _runToken,
       sessionAllowed: _sessionAllowed,
+      maxSteps: ref.read(appSettingsProvider).maxSteps,
+      extraInstructions: ref.read(appSettingsProvider).extraInstructions,
     );
 
     try {
@@ -296,14 +428,8 @@ class ChatController extends Notifier<ChatState> {
     _resolveAll(ApprovalDecision.deny);
   }
 
-  void clear() {
-    stop();
-    _runToken++;
-    _history.clear();
-    _sessionAllowed.clear();
-    state = const ChatState();
-    _persist();
-  }
+  /// Same as [newConversation]; kept for the "new conversation" button.
+  void clear() => newConversation();
 
   void decide(String callId, ApprovalDecision decision) {
     final completer = _pending.remove(callId);

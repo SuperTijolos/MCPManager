@@ -29,6 +29,15 @@ class McpClient implements McpConnection {
   final http.Client _http;
   final bool _ownsClient;
 
+  final List<String> _trace = [];
+
+  @override
+  List<String> get trace => List.unmodifiable(_trace);
+
+  void _log(String line) {
+    if (_trace.length < 60) _trace.add(line);
+  }
+
   String? _sessionId;
   String _protocolVersion = mcpProtocolVersion;
   bool _initialized = false;
@@ -56,6 +65,12 @@ class McpClient implements McpConnection {
     _protocolVersion =
         result['protocolVersion'] as String? ?? mcpProtocolVersion;
     _initialized = true;
+    _log(
+      _sessionId == null
+          ? 'session: none (the server sent no Mcp-Session-Id, or this browser '
+                'is not allowed to read it)'
+          : 'session: received',
+    );
     await _notify('notifications/initialized');
 
     final server = (result['serverInfo'] as Map?)?.cast<String, dynamic>();
@@ -124,7 +139,39 @@ class McpClient implements McpConnection {
 
   Future<void> _notify(String method) async {
     final body = jsonEncode({'jsonrpc': '2.0', 'method': method});
-    await _post(body, const Duration(seconds: 10));
+    final response = await _post(body, const Duration(seconds: 10));
+    _log('POST $method → ${response.statusCode}');
+    // Most servers answer 202. Be lenient about odd statuses, but a "no such
+    // session" reply means nothing after this will work either.
+    if (_isSessionProblem(response, method)) {
+      throw _sessionProblem(response, method);
+    }
+  }
+
+  /// A reply that means the session is unknown to the server.
+  bool _isSessionProblem(http.Response r, String method) {
+    if (method == 'initialize') return false;
+    if (r.statusCode == 404 || r.statusCode == 410) return true;
+    return r.statusCode == 400 &&
+        RegExp('session', caseSensitive: false).hasMatch(r.body);
+  }
+
+  McpException _sessionProblem(http.Response r, String method) {
+    final said = truncate(r.body, 220);
+    return McpException(
+      _sessionId == null
+          ? 'The server needs a session, but this browser could not read the '
+                'Mcp-Session-Id header it sent when initializing. Browsers only '
+                'expose that header when the server lists it in '
+                'Access-Control-Expose-Headers, so the server (or a proxy in '
+                'front of it) has to allow that; its legacy /sse endpoint may '
+                'work instead. Server said (HTTP ${r.statusCode}): $said'
+          : 'The server rejected the session it had just created '
+                '(HTTP ${r.statusCode} on $method): $said. Servers that keep '
+                'sessions in the memory of one instance can fail like this '
+                'when requests reach different instances.',
+      code: r.statusCode,
+    );
   }
 
   Future<Json> _request(
@@ -142,12 +189,14 @@ class McpClient implements McpConnection {
       'params': ?params,
     });
     final response = await _post(body, timeout);
+    _log('POST $method → ${response.statusCode}');
 
     if (response.statusCode == 404 &&
         _sessionId != null &&
         method != 'initialize' &&
         allowReconnect) {
       // The server forgot our session; start a new one and retry once.
+      _log('session unknown to the server: starting a new one');
       await connect();
       return _request(method, params, timeout: timeout, allowReconnect: false);
     }
@@ -174,6 +223,9 @@ class McpClient implements McpConnection {
         'Forbidden (HTTP 403). The credentials were accepted but lack access.',
         code: 403,
       );
+    }
+    if (_isSessionProblem(response, method)) {
+      throw _sessionProblem(response, method);
     }
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw McpException(

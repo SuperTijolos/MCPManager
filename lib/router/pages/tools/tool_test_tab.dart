@@ -1,0 +1,184 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../../engine/audit/audit_models.dart';
+import '../../../engine/core/json.dart';
+import '../../../engine/mcp/mcp_hub.dart';
+import '../../../engine/mcp/mcp_models.dart';
+import '../../../engine/mcp/schema.dart';
+import '../../../engine/rules/tool_rules.dart';
+import '../../../engine/rules/tool_rules_store.dart';
+import '../../../ui/theme.dart';
+import '../../../ui/widgets.dart';
+
+/// Run a tool by hand: edit the arguments, press Run, read the result.
+///
+/// With "Apply rules" on (the default when rules apply) the call goes through
+/// the same path as the Operator's: extra arguments are required and recorded,
+/// audit-only ones are stripped, fixed values are injected.
+class ToolTestTab extends ConsumerStatefulWidget {
+  const ToolTestTab({super.key, required this.toolRef});
+
+  final ToolRef toolRef;
+
+  @override
+  ConsumerState<ToolTestTab> createState() => _ToolTestTabState();
+}
+
+class _ToolTestTabState extends ConsumerState<ToolTestTab> {
+  late final TextEditingController _args = TextEditingController();
+  bool _applyRules = true;
+  McpToolResult? _result;
+  Json? _forwarded;
+  int? _durationMs;
+  String? _argsError;
+  bool _running = false;
+
+  McpTool get _tool => widget.toolRef.tool;
+
+  EffectiveTool get _effective =>
+      ref.read(toolRulesProvider).effective(widget.toolRef.server, _tool);
+
+  @override
+  void initState() {
+    super.initState();
+    _applyRules = _effective.extras.isNotEmpty || _effective.fixed.isNotEmpty;
+    _resetTemplate();
+  }
+
+  @override
+  void dispose() {
+    _args.dispose();
+    super.dispose();
+  }
+
+  void _resetTemplate() {
+    final schema = _applyRules ? _effective.inputSchema : _tool.inputSchema;
+    _args.text = prettyJson(skeletonFromSchema(schema));
+  }
+
+  Future<void> _run() async {
+    final parsed = tryDecodeObject(
+      _args.text.trim().isEmpty ? '{}' : _args.text,
+    );
+    if (parsed == null) {
+      setState(() => _argsError = 'Arguments must be a valid JSON object.');
+      return;
+    }
+    final effective = _effective;
+    final prepared = _applyRules ? prepareCall(effective, parsed) : null;
+    if (prepared?.error != null) {
+      setState(() {
+        _argsError = null;
+        _forwarded = null;
+        _result = McpToolResult.error(prepared!.error!);
+        _durationMs = 0;
+      });
+      return;
+    }
+
+    setState(() {
+      _argsError = null;
+      _running = true;
+      _result = null;
+      _forwarded = prepared?.forwarded;
+    });
+    final watch = Stopwatch()..start();
+    final result = await ref
+        .read(mcpHubProvider.notifier)
+        .callTool(
+          serverId: widget.toolRef.server.id,
+          toolName: _tool.name,
+          args: prepared?.forwarded ?? parsed,
+          clientArgs: prepared == null ? null : parsed,
+          context: prepared?.context,
+          source: AuditSource.workbench,
+          actor: 'user',
+        );
+    watch.stop();
+    if (!mounted) return;
+    setState(() {
+      _running = false;
+      _result = result;
+      _durationMs = watch.elapsedMilliseconds;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final effective = ref
+        .watch(toolRulesProvider)
+        .effective(widget.toolRef.server, _tool);
+    final hasRules = effective.extras.isNotEmpty || effective.fixed.isNotEmpty;
+    final result = _result;
+    var output = result?.text ?? '';
+    final asJson = result == null ? null : tryDecodeJson(output);
+    if (asJson != null) output = prettyJson(asJson);
+
+    return ListView(
+      padding: const EdgeInsets.only(top: 12),
+      children: [
+        if (hasRules)
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Apply rules (as the Operator would)'),
+            subtitle: Text(
+              effective.extras.isEmpty
+                  ? 'Fixed values are injected and hidden.'
+                  : 'Also fill in: ${effective.extras.map((e) => e.arg.name).join(', ')}',
+            ),
+            value: _applyRules,
+            onChanged: (v) => setState(() {
+              _applyRules = v;
+              _resetTemplate();
+            }),
+          ),
+        Text('Arguments (JSON)', style: theme.textTheme.titleSmall),
+        const SizedBox(height: 6),
+        TextField(
+          controller: _args,
+          minLines: 4,
+          maxLines: 12,
+          style: const TextStyle(fontFamilyFallback: monoFonts, fontSize: 13),
+          decoration: InputDecoration(errorText: _argsError),
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            FilledButton.icon(
+              onPressed: _running ? null : _run,
+              icon: _running
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.play_arrow_rounded),
+              label: const Text('Run'),
+            ),
+            const SizedBox(width: 12),
+            if (result != null) ...[
+              StatusChip(
+                result.isError ? 'error' : 'ok',
+                result.isError ? StatusColors.bad : StatusColors.ok,
+              ),
+              const SizedBox(width: 8),
+              Text('$_durationMs ms', style: theme.textTheme.bodySmall),
+            ],
+          ],
+        ),
+        if (_forwarded != null && result != null) ...[
+          const SizedBox(height: 12),
+          Text('Sent to the server', style: theme.textTheme.bodySmall),
+          const SizedBox(height: 4),
+          JsonBlock(_forwarded, maxHeight: 140),
+        ],
+        if (result != null) ...[
+          const SizedBox(height: 12),
+          CodeBlock(output, maxHeight: 360),
+        ],
+      ],
+    );
+  }
+}

@@ -12,6 +12,7 @@ import '../../../engine/mcp/mcp_hub.dart';
 import '../../../ui/sign_in.dart';
 import '../../../ui/theme.dart';
 import '../../../ui/widgets.dart';
+import 'history_panel.dart';
 
 class ChatPage extends ConsumerStatefulWidget {
   const ChatPage({super.key});
@@ -52,119 +53,151 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     });
   }
 
+  bool _historyOpen = true;
+
+  Widget _conversation(ChatState chat, LlmSettings settings) => Column(
+    children: [
+      Expanded(
+        child: chat.items.isEmpty
+            ? _Welcome(
+                onPick: (text) {
+                  _input.text = text;
+                  _send();
+                },
+              )
+            : ListView.builder(
+                controller: _scroll,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: kPagePadding,
+                  vertical: 8,
+                ),
+                itemCount: chat.items.length,
+                itemBuilder: (context, i) => Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 820),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      child: SizedBox(
+                        width: double.infinity,
+                        child: _ItemView(
+                          chat.items[i],
+                          isLast: i == chat.items.length - 1,
+                          running: chat.running,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+      ),
+      const _SignInBanner(),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(kPagePadding, 4, kPagePadding, 16),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 820),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Expanded(
+                  child: CallbackShortcuts(
+                    bindings: {
+                      const SingleActivator(LogicalKeyboardKey.enter): _send,
+                    },
+                    child: TextField(
+                      controller: _input,
+                      focusNode: _focus,
+                      minLines: 1,
+                      maxLines: 6,
+                      textInputAction: TextInputAction.newline,
+                      decoration: const InputDecoration(
+                        hintText: 'Ask about servers, tools or failures… (Shift+Enter for a new line)',
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                chat.running
+                    ? IconButton.filledTonal(
+                        tooltip: 'Stop',
+                        icon: const Icon(Icons.stop_rounded),
+                        onPressed: ref
+                            .read(chatControllerProvider.notifier)
+                            .stop,
+                      )
+                    : IconButton.filled(
+                        tooltip: 'Send',
+                        icon: const Icon(Icons.arrow_upward_rounded),
+                        onPressed: settings.isReady
+                            ? _send
+                            : () => context.go('/settings'),
+                      ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ],
+  );
+
   @override
   Widget build(BuildContext context) {
     final chat = ref.watch(chatControllerProvider);
     final settings = ref.watch(llmSettingsProvider);
     ref.listen(chatControllerProvider, (previous, next) => _followTail());
+    final wide = MediaQuery.sizeOf(context).width >= 980;
+    final active = chat.conversations
+        .where((c) => c.id == chat.activeId)
+        .firstOrNull;
 
     return PageScaffold(
       title: 'Operator',
       subtitle: settings.isReady
-          ? '${settings.activeModel} · ${settings.activeProvider!.name}'
+          ? '${active?.title ?? 'New conversation'} · ${settings.activeModel}'
           : 'No model configured',
       padded: false,
       actions: [
         const _ModelPicker(),
         const SizedBox(width: 4),
         IconButton(
+          tooltip: wide
+              ? (_historyOpen ? 'Hide history' : 'Show history')
+              : 'Conversation history',
+          icon: Icon(
+            Icons.history,
+            color: wide && _historyOpen
+                ? Theme.of(context).colorScheme.primary
+                : null,
+          ),
+          onPressed: wide
+              ? () => setState(() => _historyOpen = !_historyOpen)
+              : () => showModalBottomSheet<void>(
+                  context: context,
+                  isScrollControlled: true,
+                  showDragHandle: true,
+                  builder: (sheet) => SizedBox(
+                    height: MediaQuery.sizeOf(sheet).height * 0.75,
+                    child: HistoryPanel(onPicked: () => Navigator.pop(sheet)),
+                  ),
+                ),
+        ),
+        IconButton(
           tooltip: 'New conversation',
           icon: const Icon(Icons.add_comment_outlined),
           onPressed: chat.items.isEmpty
               ? null
-              : ref.read(chatControllerProvider.notifier).clear,
+              : ref.read(chatControllerProvider.notifier).newConversation,
         ),
       ],
-      child: Column(
-        children: [
-          Expanded(
-            child: chat.items.isEmpty
-                ? _Welcome(
-                    onPick: (text) {
-                      _input.text = text;
-                      _send();
-                    },
-                  )
-                : ListView.builder(
-                    controller: _scroll,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: kPagePadding,
-                      vertical: 8,
-                    ),
-                    itemCount: chat.items.length,
-                    itemBuilder: (context, i) => Center(
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 820),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 6),
-                          child: SizedBox(
-                            width: double.infinity,
-                            child: _ItemView(
-                              chat.items[i],
-                              isLast: i == chat.items.length - 1,
-                              running: chat.running,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-          ),
-          const _SignInBanner(),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(
-              kPagePadding,
-              4,
-              kPagePadding,
-              16,
-            ),
-            child: Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 820),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Expanded(
-                      child: CallbackShortcuts(
-                        bindings: {
-                          const SingleActivator(LogicalKeyboardKey.enter):
-                              _send,
-                        },
-                        child: TextField(
-                          controller: _input,
-                          focusNode: _focus,
-                          minLines: 1,
-                          maxLines: 6,
-                          textInputAction: TextInputAction.newline,
-                          decoration: const InputDecoration(
-                            hintText: 'Ask about servers, tools or failures… (Shift+Enter for a new line)',
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    chat.running
-                        ? IconButton.filledTonal(
-                            tooltip: 'Stop',
-                            icon: const Icon(Icons.stop_rounded),
-                            onPressed: ref
-                                .read(chatControllerProvider.notifier)
-                                .stop,
-                          )
-                        : IconButton.filled(
-                            tooltip: 'Send',
-                            icon: const Icon(Icons.arrow_upward_rounded),
-                            onPressed: settings.isReady
-                                ? _send
-                                : () => context.go('/settings'),
-                          ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
+      child: wide && _historyOpen
+          ? Row(
+              children: [
+                const SizedBox(width: 280, child: HistoryPanel()),
+                const VerticalDivider(width: 1),
+                Expanded(child: _conversation(chat, settings)),
+              ],
+            )
+          : _conversation(chat, settings),
     );
   }
 }

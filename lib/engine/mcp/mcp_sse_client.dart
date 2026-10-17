@@ -39,6 +39,15 @@ class McpSseClient implements McpConnection {
   final bool _ownsClient;
   final Uri _url;
 
+  final List<String> _trace = [];
+
+  @override
+  List<String> get trace => List.unmodifiable(_trace);
+
+  void _log(String line) {
+    if (_trace.length < 60) _trace.add(line);
+  }
+
   Uri? _postUrl;
   StreamSubscription<String>? _subscription;
   Completer<Uri>? _endpoint;
@@ -62,6 +71,7 @@ class McpSseClient implements McpConnection {
   @override
   Future<McpServerInfo> connect() async {
     _teardown('Reconnecting.');
+    _trace.clear();
     await _openStream();
     final result = await _rpc('initialize', {
       'protocolVersion': mcpProtocolVersion,
@@ -148,6 +158,7 @@ class McpSseClient implements McpConnection {
       throw _networkError(e);
     }
 
+    _log('GET $_url → ${response.statusCode}');
     if (response.statusCode == 401) {
       final challenge = response.headers['www-authenticate'];
       await response.stream.drain<void>().catchError((_) {});
@@ -163,7 +174,9 @@ class McpSseClient implements McpConnection {
       throw McpException(
         'HTTP ${response.statusCode} opening the event stream at $_url'
         '${body.isEmpty ? '' : ': ${truncate(body, 200)}'}',
-        code: response.statusCode,
+        // A success that is not a stream means "this URL does not do SSE";
+        // report it like any other wrong-transport answer.
+        code: response.statusCode < 300 ? 406 : response.statusCode,
       );
     }
     final type = response.headers['content-type'] ?? '';
@@ -245,6 +258,7 @@ class McpSseClient implements McpConnection {
         );
         return;
       }
+      _log('endpoint: ${resolved.path}${resolved.hasQuery ? '?…' : ''}');
       endpoint.complete(resolved);
       return;
     }

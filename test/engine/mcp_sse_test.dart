@@ -351,7 +351,8 @@ void main() {
     test('a /sse URL tries the legacy transport first', () {
       expect(
         show(_config('http://h:1/sse', transport: McpTransport.auto)),
-        'sse http://h:1/sse | streamable-http http://h:1/sse',
+        'sse http://h:1/sse | streamable-http http://h:1/sse | '
+        'streamable-http http://h:1/mcp',
       );
     });
 

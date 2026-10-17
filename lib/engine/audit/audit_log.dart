@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/ids.dart';
@@ -5,7 +7,11 @@ import '../core/prefs.dart';
 import 'audit_models.dart';
 
 const _storageKey = 'mcpm.audit.v1';
-const auditCapacity = 500;
+const auditCapacity = 1000;
+
+/// Browsers give localStorage about 5 MB for everything; keep the audit log
+/// well under that by dropping the oldest events if it gets too big.
+const _maxStoredChars = 2500000;
 
 final auditLogProvider = NotifierProvider<AuditLog, List<AuditEvent>>(
   AuditLog.new,
@@ -39,6 +45,8 @@ class AuditLog extends Notifier<List<AuditEvent>> {
     String? toolName,
     int? durationMs,
     String? args,
+    String? forwarded,
+    String? context,
     String? result,
     String? error,
     String? approval,
@@ -55,6 +63,8 @@ class AuditLog extends Notifier<List<AuditEvent>> {
       toolName: toolName,
       durationMs: durationMs,
       args: args,
+      forwarded: forwarded,
+      context: context,
       result: result,
       error: error,
       approval: approval,
@@ -71,8 +81,13 @@ class AuditLog extends Notifier<List<AuditEvent>> {
   }
 
   void _persist() {
-    writeJson(ref.read(sharedPreferencesProvider), _storageKey, [
-      for (final e in state) e.toJson(),
-    ]);
+    var json = [for (final e in state) e.toJson()];
+    var size = jsonEncode(json).length;
+    while (size > _maxStoredChars && state.length > 50) {
+      state = state.sublist(0, (state.length * 0.8).floor());
+      json = [for (final e in state) e.toJson()];
+      size = jsonEncode(json).length;
+    }
+    writeJson(ref.read(sharedPreferencesProvider), _storageKey, json);
   }
 }

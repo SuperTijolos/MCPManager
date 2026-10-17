@@ -30,6 +30,15 @@ List<ConnectionAttempt> connectionCandidates(McpServerConfig config) {
     host: url.host,
     port: url.hasPort ? url.port : null,
   );
+  // `/mcp` and `/sse` are the conventional pair of endpoints; servers such as
+  // Cloudflare's offer both, so try the sibling of whichever was given.
+  Uri? sibling(String from, String to) => url.path.endsWith('/$from')
+      ? url.replace(
+          path: '${url.path.substring(0, url.path.length - from.length)}$to',
+        )
+      : null;
+  final siblingSse = sibling('mcp', 'sse');
+  final siblingMcp = sibling('sse', 'mcp');
   final list = <ConnectionAttempt>[
     if (url.path.endsWith('/sse')) ...[
       (transport: McpTransport.sse, url: url),
@@ -38,6 +47,9 @@ List<ConnectionAttempt> connectionCandidates(McpServerConfig config) {
       (transport: McpTransport.streamableHttp, url: url),
       (transport: McpTransport.sse, url: url),
     ],
+    if (siblingSse != null) (transport: McpTransport.sse, url: siblingSse),
+    if (siblingMcp != null)
+      (transport: McpTransport.streamableHttp, url: siblingMcp),
     if (bare) ...[
       (
         transport: McpTransport.streamableHttp,
@@ -88,6 +100,11 @@ class AutoMcpConnection implements McpConnection {
   final http.Client _http;
 
   McpConnection? _active;
+  List<McpTool>? _discovered;
+  final List<String> _trace = [];
+
+  @override
+  List<String> get trace => List.unmodifiable(_trace);
 
   @override
   bool get isConnected => _active?.isConnected ?? false;
@@ -102,6 +119,8 @@ class AutoMcpConnection implements McpConnection {
   Future<McpServerInfo> connect() async {
     _active?.close();
     _active = null;
+    _discovered = null;
+    _trace.clear();
     final attempts = <String>[];
     McpException? last;
 
@@ -121,14 +140,26 @@ class AutoMcpConnection implements McpConnection {
               httpClient: _http,
               tokenProvider: tokenProvider,
             );
+      _trace.add('— ${candidate.transport.label} at ${candidate.url} —');
       try {
         final info = await connection.connect();
+        // Completing the handshake is not enough: some servers accept
+        // `initialize` and then refuse everything (for example when they
+        // cannot keep the session). Only a transport that can also list the
+        // tools is accepted; otherwise the next one is tried.
+        final tools = await connection.listTools();
+        _trace.addAll(connection.trace);
         _active = connection;
+        _discovered = tools;
         return info;
       } on McpAuthRequired {
+        _trace.addAll(connection.trace);
         connection.close();
         rethrow; // reached the right endpoint; it just needs credentials
       } on McpException catch (e) {
+        _trace
+          ..addAll(connection.trace)
+          ..add('failed: ${e.message}');
         connection.close();
         // Anything other than "wrong endpoint/transport" (network error,
         // timeout, server error) will not be fixed by trying another path.
@@ -151,7 +182,15 @@ class AutoMcpConnection implements McpConnection {
       _active ?? (throw McpException('Not connected.'));
 
   @override
-  Future<List<McpTool>> listTools() => _connection.listTools();
+  Future<List<McpTool>> listTools() async {
+    // The first call returns what the handshake already discovered.
+    final cached = _discovered;
+    if (cached != null) {
+      _discovered = null;
+      return cached;
+    }
+    return _connection.listTools();
+  }
 
   @override
   Future<McpToolResult> callTool(String name, Json arguments) =>

@@ -12,6 +12,10 @@ abstract interface class McpConnection {
   /// endpoint was auto-detected (for example `…/sse` for a bare host:port).
   String get endpointUrl;
 
+  /// A short, secret-free log of the last connection attempt (requests and
+  /// statuses), shown under "Connection details" to help diagnose failures.
+  List<String> get trace;
+
   Future<McpServerInfo> connect();
   Future<List<McpTool>> listTools();
   Future<McpToolResult> callTool(String name, Json arguments);

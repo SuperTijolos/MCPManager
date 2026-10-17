@@ -21,6 +21,8 @@ class AuditEvent {
     this.toolName,
     this.durationMs,
     this.args,
+    this.forwarded,
+    this.context,
     this.result,
     this.error,
     this.approval,
@@ -38,7 +40,15 @@ class AuditEvent {
   final String? serverName;
   final String? toolName;
   final int? durationMs;
+
+  /// What the caller sent, redacted.
   final String? args;
+
+  /// What was actually forwarded to the server, when rules changed it.
+  final String? forwarded;
+
+  /// Audit-only values supplied by the model (for example a reason).
+  final String? context;
   final String? result;
   final String? error;
 
@@ -58,6 +68,8 @@ class AuditEvent {
     if (toolName != null) 'tool': toolName,
     if (durationMs != null) 'durationMs': durationMs,
     if (args != null) 'args': args,
+    if (forwarded != null) 'forwarded': forwarded,
+    if (context != null) 'context': context,
     if (result != null) 'result': result,
     if (error != null) 'error': error,
     if (approval != null) 'approval': approval,
@@ -75,6 +87,8 @@ class AuditEvent {
     toolName: json['tool'] as String?,
     durationMs: json['durationMs'] as int?,
     args: json['args'] as String?,
+    forwarded: json['forwarded'] as String?,
+    context: json['context'] as String?,
     result: json['result'] as String?,
     error: json['error'] as String?,
     approval: json['approval'] as String?,

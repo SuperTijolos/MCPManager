@@ -9,11 +9,20 @@ This is a ground-up rewrite of the earlier Node/Next.js version (kept locally in
 | Page | |
 |---|---|
 | **Overview** | Servers online, tools, 24 h call volume per hour, error rate, latency (avg / p95), busiest tools, model reachability check. |
-| **Servers** | Add/edit/remove MCP servers (Streamable HTTP or legacy HTTP+SSE, detected automatically), bearer token / OAuth and custom headers, live status, protocol and latency, reconnect. |
-| **Tools** | Browse and search every discovered tool, read its schema, edit a generated argument template and run it from a test bench. |
-| **Operator** | Chat with the model. It can manage servers (add, change, remove, enable, reconnect), read tool schemas, search the audit log, switch models, and run your servers' tools. Streams text and reasoning, shows each call as a card, remembers the conversation across reloads. |
-| **Audit** | Every tool call and connection, filterable, with redacted arguments/results, actor and approval mode. Copy as JSON. |
-| **Settings** | Model providers (Ollama, OpenAI-compatible), per-provider enabled models, discovery, custom model names. |
+| **Servers** | Add/edit/remove MCP servers (Streamable HTTP or legacy HTTP+SSE, detected automatically), bearer token / OAuth and custom headers, live status, protocol, latency and a trace of what was tried. The Edit dialog is sectioned (connection, authentication, headers, advanced) and has a **Test connection** button. |
+| **Tools** | Browse and search every tool, read its schema, run it from a test bench. The list and detail panes are separated by a draggable divider (double-click resets, ←/→ nudge). **Rules** reshape what the Operator sees (see below). |
+| **Operator** | Chat with the model. It can manage servers, find the right tool for a job, recover from failed calls, and run your servers' tools. Conversations are saved: a history panel lets you search, rename, delete and reopen older chats. |
+| **Audit** | Every tool call, connection, sign-in and management action, filterable and paginated (page size selectable), with redacted arguments/results, actor and approval mode. Copy as JSON. |
+| **Settings** | Model providers and enabled models (with presets for common endpoints), Operator limits and your own instructions, plus storage usage, backup / restore and a full reset. |
+| **About / Contributors** | What the app does, how the pieces fit, safety and data notes, facts about this copy (including the OAuth redirect URI), and the people who built it. |
+
+### Tool rules
+
+A rule adds arguments such as `reason` or `expected result` to many tools at once. Scope a rule to all tools or to chosen ones (select several in the Tools list and add the same argument in one go), optionally with conditions. Per argument you choose whether the model must fill it, whether it is sent to the server or kept for the audit log only, or whether it is a fixed value the model never sees. Rules can also append instructions or hide tools from the Operator. Rules at the top of the list win on conflicts (drag to reorder), and a diff shows each tool's original and effective schema. Calls missing a required rule argument are rejected before they reach the server and recorded.
+
+### Operator intelligence
+
+The Operator is given a map of your tools grouped by purpose (for example "run commands", "read files", "search") computed from names, schemas and annotations only, never from server-written text. `mcpm_find_tools` searches that map. After a failed call it gets a hint to try a related tool (for example list a directory before guessing a path) instead of asking you straight away.
 
 ### Safety model
 
@@ -87,12 +96,15 @@ lib/
     llm/                     provider interface, Ollama + OpenAI-compatible, settings
     agent/                   tool-calling loop, toolbox, approval flow, chat controller
     audit/                   append-only log, stats
+    rules/, settings/        tool rules, Operator settings, backup / restore
   router/
     routes.dart, shell.dart  go_router + responsive shell (rail ≥ 900 px, drawer below)
     pages/<name>/<name>_page.dart
   ui/                        theme and shared widgets
 test/                        engine tests + widget tests (incl. phone-width layout sweep)
 ```
+
+Rules, conversations, settings and the audit log live in `engine/` and are covered by tests; the pages only render them.
 
 State is managed with Riverpod and persisted in the browser (`shared_preferences`).
 
@@ -104,10 +116,13 @@ flutter test
 flutter build web
 ```
 
+The suite (330 tests) covers the engine, the MCP clients against fake servers (including session expiry and SSE), OAuth, rules, chat history, backups and the pages at desktop and phone widths.
+
 ## Limits and not-yet-ported features
 
 - Browser build only: no stdio MCP servers, and the app can't host MCP endpoints itself.
 - OAuth sign-in needs a browser that allows pop-ups; the in-app preview browser of some tools doesn't.
 - Not ported from the Node version: portals (published gateway endpoints), policies and tool overrides, investigations, mind map, OAuth *login to this app* (OAuth to MCP servers is supported), Postgres/pgvector, OpenTelemetry.
 - Server tokens and provider API keys are kept in the browser's local storage, and the `.env` asset is downloadable by anyone who can load the app — don't put secrets there, and don't expose a deployed build that holds real credentials.
-- The audit log is capped at 500 events and lives only in this browser.
+- Session errors such as "Session expired or does not exist" make the app re-initialise once, then try the sibling endpoint; the server card's trace shows what happened. Whether a particular server accepts this app's OAuth redirect URI is up to that server.
+- The audit log is capped at 1000 events and lives only in this browser.

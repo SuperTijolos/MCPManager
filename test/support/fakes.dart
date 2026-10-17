@@ -586,3 +586,107 @@ class FakeSseServer {
     Future<void>.delayed(delay, () => _send(text));
   }
 }
+
+// ---------------------------------------------------------------------------
+// Servers with session trouble (the Cloudflare-style failure modes)
+
+/// The body a server sends when it does not know the session.
+const sessionGoneBody =
+    '{"jsonrpc":"2.0","error":{"code":-32000,"message":"Bad Request: Session expired or does not exist. Please reconnect."},"id":null}';
+
+/// A server at `/mcp` (Streamable HTTP) that misbehaves about sessions, and
+/// optionally a legacy SSE server at `/sse` next to it.
+///
+/// - [hideSessionHeader]: it issues a session but the browser cannot read the
+///   `Mcp-Session-Id` header (not listed in Access-Control-Expose-Headers), so
+///   the client never learns the id and the next request is "unknown session".
+/// - [rejectSession]: it hands out a session id and then refuses to recognise
+///   it (state kept per instance, requests landing elsewhere).
+/// - [rejectInitialized]: only the `initialized` notification is refused.
+class SessionTroubleServer {
+  SessionTroubleServer({
+    this.hideSessionHeader = false,
+    this.rejectSession = false,
+    this.badNotification = false,
+    this.sse,
+    this.tools = const [],
+  });
+
+  final bool hideSessionHeader;
+  final bool rejectSession;
+
+  /// Answers `initialized` with a plain 400 that does not mention sessions.
+  final bool badNotification;
+  final FakeSseServer? sse;
+  final List<Json> tools;
+
+  final log = <String>[];
+
+  http.Client get client => MockClient.streaming((request, bodyStream) async {
+    final path = request.url.path;
+    log.add('${request.method} $path');
+
+    // The legacy transport, when present, owns /sse and /messages.
+    if (sse != null && (path == '/sse' || path.startsWith('/messages'))) {
+      return forwardTo(sse!.client, request, bodyStream);
+    }
+
+    http.StreamedResponse reply(
+      int status,
+      String body, {
+      Map<String, String>? headers,
+    }) => http.StreamedResponse(
+      Stream.value(utf8.encode(body)),
+      status,
+      headers: {'content-type': 'application/json', ...?headers},
+    );
+
+    if (path != '/mcp' || request.method != 'POST') {
+      return reply(404, 'not found');
+    }
+    final body = (jsonDecode(await bodyStream.bytesToString()) as Map)
+        .cast<String, dynamic>();
+    final method = body['method'] as String;
+    final id = body['id'];
+
+    if (method == 'initialize') {
+      return reply(
+        200,
+        jsonEncode({
+          'jsonrpc': '2.0',
+          'id': id,
+          'result': {
+            'protocolVersion': '2025-06-18',
+            'capabilities': {'tools': {}},
+            'serverInfo': {'name': 'edge-server', 'version': '1.0.0'},
+          },
+        }),
+        headers: {if (!hideSessionHeader) 'mcp-session-id': 'sess-abc'},
+      );
+    }
+    if (hideSessionHeader || rejectSession) return reply(404, sessionGoneBody);
+    if (badNotification && id == null) return reply(400, 'Bad notification');
+    if (id == null) return reply(202, '');
+    return reply(
+      200,
+      jsonEncode({
+        'jsonrpc': '2.0',
+        'id': id,
+        'result': method == 'tools/list' ? {'tools': tools} : {},
+      }),
+    );
+  });
+}
+
+/// Re-sends a request received by one fake to another client. A request that
+/// has already been sent cannot be reused, so build an equivalent new one.
+Future<http.StreamedResponse> forwardTo(
+  http.Client target,
+  http.BaseRequest request,
+  http.ByteStream bodyStream,
+) async {
+  final copy = http.Request(request.method, request.url)
+    ..headers.addAll(request.headers)
+    ..bodyBytes = await bodyStream.toBytes();
+  return target.send(copy);
+}

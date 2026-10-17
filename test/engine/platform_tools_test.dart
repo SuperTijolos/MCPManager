@@ -728,6 +728,15 @@ void main() {
   });
 
   group('conversation persistence', () {
+    /// Everything the chat stored, as a fresh browser profile would see it.
+    Map<String, Object> chatPrefs(ProviderContainer c) {
+      final sp = c.read(sharedPreferencesProvider);
+      return {
+        for (final k in sp.getKeys())
+          if (k.startsWith('mcpm.chat')) k: sp.get(k)!,
+      };
+    }
+
     test('a finished conversation is restored after a restart, and the model keeps its context', () async {
       final llm = ScriptedLlm([
         [_call('c1', 'mcpm_list_servers')],
@@ -737,17 +746,11 @@ void main() {
       await first
           .read(chatControllerProvider.notifier)
           .send('what servers do I have?');
-      final stored = first
-          .read(sharedPreferencesProvider)
-          .getString('mcpm.chat.v1')!;
 
       final llm2 = ScriptedLlm([
         [const LlmTextDelta('Still none.'), const LlmDone()],
       ]);
-      final second = await _container(
-        llm: llm2,
-        prefs: {'mcpm.chat.v1': stored},
-      );
+      final second = await _container(llm: llm2, prefs: chatPrefs(first));
       final restored = second.read(chatControllerProvider).items;
       expect(
         restored.whereType<UserItem>().single.text,
@@ -785,20 +788,19 @@ void main() {
       await pumpEventQueue();
       expect(_items(first).single.status, ToolStatus.awaitingApproval);
 
-      // Simulate closing the page mid-run: persist what is there.
       controller.stop();
       await run;
-      final stored = jsonDecode(
-        first.read(sharedPreferencesProvider).getString('mcpm.chat.v1')!,
-      ) as Map;
       // Force the in-flight state into storage, as if the page died first.
+      final prefs = chatPrefs(first);
+      final id = first.read(chatControllerProvider).activeId!;
+      final key = 'mcpm.chat.$id.v1';
+      final stored = jsonDecode(prefs[key]! as String) as Map;
       (stored['items'] as List).lastWhere(
         (i) => i['type'] == 'tool',
       )['status'] = 'awaitingApproval';
+      prefs[key] = jsonEncode(stored);
 
-      final second = await _container(
-        prefs: {'mcpm.chat.v1': jsonEncode(stored)},
-      );
+      final second = await _container(prefs: prefs);
       final tool = second
           .read(chatControllerProvider)
           .items
@@ -806,21 +808,6 @@ void main() {
           .single;
       expect(tool.status, ToolStatus.error);
       expect(tool.output, contains('Interrupted'));
-    });
-
-    test('clear removes the stored conversation', () async {
-      final llm = ScriptedLlm([
-        [const LlmTextDelta('hi'), const LlmDone()],
-      ]);
-      final c = await _container(llm: llm);
-      final controller = c.read(chatControllerProvider.notifier);
-      await controller.send('hello');
-      controller.clear();
-      final stored = jsonDecode(
-        c.read(sharedPreferencesProvider).getString('mcpm.chat.v1')!,
-      ) as Map;
-      expect(stored['items'], isEmpty);
-      expect(stored['history'], isEmpty);
     });
   });
 
