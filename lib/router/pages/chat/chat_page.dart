@@ -473,7 +473,7 @@ class _AssistantView extends StatelessWidget {
               icon: const Icon(Icons.copy_outlined),
             ),
           ),
-        ] else if (streaming && item.thinking.isEmpty)
+        ] else if (streaming && (item.thinking.isEmpty || !showThinking))
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 6),
             child: SizedBox(
