@@ -94,19 +94,28 @@ class _ServersPageState extends ConsumerState<ServersPage> {
                                 : constraints.maxWidth >= 740
                                 ? 2
                                 : 1;
-                            return GridView.builder(
+                            // Fixed grid extents kept unused space below the
+                            // metrics when the software row was removed. Let
+                            // each card use its natural height instead.
+                            const gap = 12.0;
+                            final cardWidth =
+                                (constraints.maxWidth - gap * (columns - 1)) /
+                                columns;
+                            return SingleChildScrollView(
                               key: const ValueKey('server-grid'),
-                              gridDelegate:
-                                  SliverGridDelegateWithFixedCrossAxisCount(
-                                    crossAxisCount: columns,
-                                    crossAxisSpacing: 12,
-                                    mainAxisSpacing: 12,
-                                    mainAxisExtent: 296,
-                                  ),
-                              itemCount: servers.length,
-                              itemBuilder: (context, index) => _ServerCard(
-                                key: ValueKey(servers[index].config.id),
-                                runtime: servers[index],
+                              child: Wrap(
+                                spacing: gap,
+                                runSpacing: gap,
+                                children: [
+                                  for (final server in servers)
+                                    SizedBox(
+                                      width: cardWidth,
+                                      child: _ServerCard(
+                                        key: ValueKey(server.config.id),
+                                        runtime: server,
+                                      ),
+                                    ),
+                                ],
                               ),
                             );
                           },
@@ -278,6 +287,7 @@ class _ServerCard extends ConsumerWidget {
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
@@ -345,8 +355,8 @@ class _ServerCard extends ConsumerWidget {
                 ),
               ],
             ),
-            const SizedBox(height: 8),
-            if (runtime.error != null)
+            if (runtime.error != null) ...[
+              const SizedBox(height: 8),
               Tooltip(
                 message: runtime.error!,
                 child: Row(
@@ -368,7 +378,8 @@ class _ServerCard extends ConsumerWidget {
                   ],
                 ),
               ),
-            const Spacer(),
+            ],
+            const SizedBox(height: 8),
             Divider(height: 1, color: theme.dividerColor),
             const SizedBox(height: 4),
             Row(

@@ -50,14 +50,22 @@ void main() {
       tester,
     ) async {
       await _withServers(tester, size);
-      final grid = tester.widget<GridView>(
-        find.byKey(const ValueKey('server-grid')),
-      );
-      expect(
-        (grid.gridDelegate as SliverGridDelegateWithFixedCrossAxisCount)
-            .crossAxisCount,
-        columns,
-      );
+      final grid = find.byKey(const ValueKey('server-grid'));
+      expect(tester.widget<SingleChildScrollView>(grid), isNotNull);
+      final alpha = tester.getTopLeft(find.text('Alpha'));
+      final beta = tester.getTopLeft(find.text('Beta'));
+      final gamma = tester.getTopLeft(find.text('Gamma'));
+      if (columns > 1) expect(alpha.dx, lessThan(beta.dx));
+      if (columns == 3) {
+        expect(alpha.dy, beta.dy);
+        expect(beta.dy, gamma.dy);
+      } else if (columns == 2) {
+        expect(alpha.dy, beta.dy);
+        expect(gamma.dy, greaterThan(beta.dy));
+      } else {
+        expect(beta.dy, greaterThan(alpha.dy));
+        expect(gamma.dy, greaterThan(beta.dy));
+      }
       expect(tester.takeException(), isNull);
     });
   }
@@ -81,6 +89,22 @@ void main() {
     expect(text.data, 'https://mcp.test/mcp');
     expect(text.style?.fontFamily, 'monospace');
     expect(find.byTooltip('Copy endpoint'), findsNWidgets(3));
+  });
+
+  testWidgets('connected cards shrink to their contents without a blank row', (
+    tester,
+  ) async {
+    await _withServers(tester, const Size(1280, 900));
+    final card = find.byType(Card).first;
+    final actions = find.descendant(
+      of: card,
+      matching: find.byKey(const ValueKey('server-card-actions')),
+    );
+    expect(tester.getSize(card).height, lessThan(280));
+    final bottomGap =
+        tester.getBottomLeft(card).dy - tester.getBottomLeft(actions).dy;
+    expect(bottomGap, lessThan(20));
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('cards never repeat server software details below metrics', (
