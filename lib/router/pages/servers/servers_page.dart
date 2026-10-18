@@ -101,7 +101,7 @@ class _ServersPageState extends ConsumerState<ServersPage> {
                                     crossAxisCount: columns,
                                     crossAxisSpacing: 12,
                                     mainAxisSpacing: 12,
-                                    mainAxisExtent: 338,
+                                    mainAxisExtent: 304,
                                   ),
                               itemCount: servers.length,
                               itemBuilder: (context, index) => _ServerCard(
@@ -336,17 +336,10 @@ class _ServerCard extends ConsumerWidget {
                 style: muted,
               ),
             const Spacer(),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                onPressed: () => _showServerDetails(context, runtime),
-                icon: const Icon(Icons.notes_rounded, size: 16),
-                label: const Text('Connection details'),
-              ),
-            ),
             Divider(height: 1, color: theme.dividerColor),
             const SizedBox(height: 4),
             Row(
+              key: const ValueKey('server-card-actions'),
               children: [
                 Switch.adaptive(
                   value: config.enabled,
@@ -365,6 +358,11 @@ class _ServerCard extends ConsumerWidget {
                     icon: const Icon(Icons.build_outlined),
                     onPressed: () => context.go('/tools'),
                   ),
+                IconButton(
+                  tooltip: 'Connection details',
+                  icon: const Icon(Icons.info_outline),
+                  onPressed: () => _showServerDetails(context, runtime),
+                ),
                 IconButton(
                   tooltip: 'Edit',
                   icon: const Icon(Icons.edit_outlined),

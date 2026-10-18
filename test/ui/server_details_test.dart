@@ -21,8 +21,8 @@ void main() {
         findsOneWidget,
       );
 
-      await tester.ensureVisible(find.text('Connection details'));
-      await tester.tap(find.text('Connection details'));
+      await tester.ensureVisible(find.byTooltip('Connection details'));
+      await tester.tap(find.byTooltip('Connection details'));
       await tester.pumpAndSettle();
       expect(find.textContaining('POST initialize → 200'), findsOneWidget);
       expect(
@@ -45,7 +45,7 @@ void main() {
         .addServer(name: 'Modern', url: 'https://mcp.test/mcp');
     await goTo(tester, '/servers');
     expect(find.text('Connected'), findsOneWidget);
-    expect(find.text('Connection details'), findsOneWidget);
+    expect(find.byTooltip('Connection details'), findsOneWidget);
     expect(
       find.textContaining('POST initialize'),
       findsNothing,

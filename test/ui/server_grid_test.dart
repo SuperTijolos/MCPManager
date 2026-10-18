@@ -6,7 +6,19 @@ import '../support/app_harness.dart';
 import '../support/fakes.dart';
 
 Future<void> _withServers(WidgetTester tester, Size size) async {
-  final container = await pumpApp(tester, size: size, server: FakeMcpServer());
+  final container = await pumpApp(
+    tester,
+    size: size,
+    server: FakeMcpServer(
+      tools: [
+        {
+          'name': 'diagnostics',
+          'description': 'Check server status',
+          'inputSchema': {'type': 'object'},
+        },
+      ],
+    ),
+  );
   for (final name in ['Alpha', 'Beta', 'Gamma']) {
     await container
         .read(mcpHubProvider.notifier)
@@ -42,7 +54,7 @@ void main() {
     tester,
   ) async {
     await _withServers(tester, const Size(1280, 900));
-    await tester.tap(find.text('Connection details').first);
+    await tester.tap(find.byTooltip('Connection details').first);
     await tester.pumpAndSettle();
     expect(find.text('Connection trace'), findsOneWidget);
     expect(find.text('Copy endpoint'), findsOneWidget);
@@ -55,9 +67,42 @@ void main() {
 
   testWidgets('connection details fit on a small screen', (tester) async {
     await _withServers(tester, const Size(360, 760));
-    await tester.tap(find.text('Connection details').first);
+    await tester.drag(
+      find.byKey(const ValueKey('server-grid')),
+      const Offset(0, -130),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Connection details').first);
     await tester.pumpAndSettle();
     expect(find.text('Connection trace'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('info icon sits alongside Tools, Edit and More', (tester) async {
+    await _withServers(tester, const Size(1280, 900));
+    final info = find.byTooltip('Connection details').first;
+    final footer = find.byKey(const ValueKey('server-card-actions')).first;
+    expect(find.descendant(of: footer, matching: info), findsOneWidget);
+    expect(
+      find.descendant(of: footer, matching: find.byTooltip('Tools')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: footer, matching: find.byTooltip('Edit')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: footer,
+        matching: find.byTooltip('More server actions'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.text('Connection details'),
+      findsNothing,
+      reason: 'details uses an icon instead of a separate card row',
+    );
     expect(tester.takeException(), isNull);
   });
 }
