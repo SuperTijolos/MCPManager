@@ -372,7 +372,7 @@ class _ServerCard extends ConsumerWidget {
               Text(
                 runtime.info == null
                     ? 'Awaiting server information'
-                    : '${runtime.info!.name} ${runtime.info!.version}',
+                    : runtime.info!.name,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: muted,

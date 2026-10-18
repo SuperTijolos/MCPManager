@@ -209,9 +209,11 @@ void main() {
       reason: 'scheme added automatically',
     );
     expect(find.text('Connected'), findsOneWidget);
+    expect(find.text('fake'), findsOneWidget);
     expect(
-      find.textContaining('fake 1.2.3', findRichText: true),
-      findsOneWidget,
+      find.textContaining('fake 1.2.3'),
+      findsNothing,
+      reason: 'the software version is available in connection details only',
     );
   });
 

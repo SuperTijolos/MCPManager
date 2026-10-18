@@ -116,6 +116,7 @@ void main() {
     expect(find.text('Connection trace'), findsOneWidget);
     expect(find.text('Copy endpoint'), findsOneWidget);
     expect(find.text('Server software'), findsOneWidget);
+    expect(find.text('fake 1.2.3'), findsWidgets);
     expect(find.text('MCP protocol'), findsOneWidget);
     await tester.tap(find.text('Close').last);
     await tester.pumpAndSettle();
