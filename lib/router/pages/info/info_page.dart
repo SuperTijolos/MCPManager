@@ -54,7 +54,7 @@ class InfoPage extends ConsumerWidget {
                   tile(
                     _Feature(
                       icon: Icons.build_outlined,
-                      title: 'Tools & rules',
+                      title: 'MCP Tools & rules',
                       route: '/mcp-tools',
                       body:
                           'Browse every tool, read its schema, and run it by hand. Rules reshape what the Operator sees: '

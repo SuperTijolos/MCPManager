@@ -78,7 +78,7 @@ void main() {
       await goTo(tester, '/info');
       for (final feature in [
         'MCP Servers',
-        'Tools & rules',
+        'MCP Tools & rules',
         'Operator',
         'Audit',
         'Settings',

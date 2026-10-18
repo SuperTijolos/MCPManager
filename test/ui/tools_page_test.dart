@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:mcp_manager/engine/core/prefs.dart';
 import 'package:mcp_manager/engine/mcp/mcp_hub.dart';
 import 'package:mcp_manager/engine/rules/tool_rules.dart';
@@ -87,6 +88,71 @@ Future<void> _pickTool(WidgetTester tester, String name) async {
 }
 
 void main() {
+  testWidgets('MCP Tools route replaces /tools and old links redirect', (
+    tester,
+  ) async {
+    await _open(tester);
+    expect(find.text('MCP Tools'), findsWidgets);
+    await goTo(tester, '/tools');
+    final router = GoRouter.of(tester.element(find.byType(Scaffold).first));
+    expect(router.routeInformationProvider.value.uri.path, '/mcp-tools');
+    expect(find.text('MCP Tools'), findsWidgets);
+  });
+
+  testWidgets('tool overview shows real counts and opens first tool', (
+    tester,
+  ) async {
+    await _open(tester);
+    expect(find.text('Explore your MCP tools'), findsOneWidget);
+    expect(find.text('4 discovered'), findsOneWidget);
+    expect(find.text('2 read-only'), findsOneWidget);
+    expect(find.text('2 may modify'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('open-first-tool')));
+    await tester.pumpAndSettle();
+    expect(find.text('Explore your MCP tools'), findsNothing);
+    expect(find.widgetWithText(Tab, 'Schema'), findsOneWidget);
+  });
+
+  testWidgets('safety filters narrow the list without changing the tools', (
+    tester,
+  ) async {
+    await _open(tester);
+    await tester.tap(find.byKey(const ValueKey('tool-filter-readOnly')));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(ListTile, 'read_file'), findsOneWidget);
+    expect(find.widgetWithText(ListTile, 'list_dir'), findsOneWidget);
+    expect(find.widgetWithText(ListTile, 'write_file'), findsNothing);
+    expect(find.text('2 of 4 tools'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('tool-filter-mayModify')));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(ListTile, 'write_file'), findsOneWidget);
+    expect(find.widgetWithText(ListTile, 'delete_file'), findsOneWidget);
+    expect(find.widgetWithText(ListTile, 'read_file'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('tool-filter-all')));
+    await tester.pumpAndSettle();
+    expect(find.text('4 of 4 tools'), findsOneWidget);
+  });
+
+  testWidgets('hidden filter follows Operator visibility overrides', (
+    tester,
+  ) async {
+    final c = await _open(tester);
+    final serverId = c.read(mcpHubProvider).servers.single.config.id;
+    c.read(toolRulesProvider.notifier).setHidden([
+      '$serverId/write_file',
+    ], true);
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('tool-filter-hidden')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('tool-filter-hidden')));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(ListTile, 'write_file'), findsOneWidget);
+    expect(find.widgetWithText(ListTile, 'read_file'), findsNothing);
+    expect(find.text('1 of 4 tools'), findsOneWidget);
+  });
+
   group('list and detail', () {
     testWidgets(
       'lists the tools, with counts on the tabs, and filters by search',
@@ -116,7 +182,7 @@ void main() {
       'selecting a tool shows its detail with Test, Schema and Operator view',
       (tester) async {
         await _open(tester);
-        expect(find.text('Select a tool'), findsOneWidget);
+        expect(find.text('Explore your MCP tools'), findsOneWidget);
         await _pickTool(tester, 'read_file');
         expect(find.text('read-only'), findsOneWidget);
         for (final tab in ['Test', 'Schema', 'Operator view']) {

@@ -8,8 +8,11 @@ import '../../../ui/theme.dart';
 import '../../../ui/widgets.dart';
 import 'rule_dialog.dart';
 
-/// Search, server filter, the tools themselves, and (in select mode) bulk
-/// actions on the chosen tools.
+/// Tool safety filters are intentionally conservative: an MCP tool without
+/// an explicit read-only annotation is classified as potentially modifying.
+enum ToolListFilter { all, readOnly, mayModify, hidden }
+
+/// Search, server and safety filters, plus (in select mode) bulk actions.
 class ToolList extends ConsumerWidget {
   const ToolList({
     super.key,
@@ -25,6 +28,9 @@ class ToolList extends ConsumerWidget {
     required this.onSelectMode,
     required this.onToggle,
     required this.onSelectAll,
+    required this.filter,
+    required this.onFilter,
+    required this.totalCount,
   });
 
   final List<ToolRef> tools;
@@ -39,6 +45,9 @@ class ToolList extends ConsumerWidget {
   final ValueChanged<bool> onSelectMode;
   final ValueChanged<String> onToggle;
   final ValueChanged<bool> onSelectAll;
+  final ToolListFilter filter;
+  final ValueChanged<ToolListFilter> onFilter;
+  final int totalCount;
 
   static String keyOf(ToolRef t) => toolKey(t.server.id, t.tool.name);
 
@@ -76,6 +85,27 @@ class ToolList extends ConsumerWidget {
                   ),
           ],
         ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 6,
+          runSpacing: 4,
+          children: [
+            for (final value in ToolListFilter.values)
+              FilterChip(
+                key: ValueKey('tool-filter-${value.name}'),
+                label: Text(switch (value) {
+                  ToolListFilter.all => 'All',
+                  ToolListFilter.readOnly => 'Read-only',
+                  ToolListFilter.mayModify => 'May modify',
+                  ToolListFilter.hidden => 'Hidden',
+                }),
+                visualDensity: VisualDensity.compact,
+                selected: filter == value,
+                showCheckmark: false,
+                onSelected: (_) => onFilter(value),
+              ),
+          ],
+        ),
         if (servers.length > 1) ...[
           const SizedBox(height: 8),
           SingleChildScrollView(
@@ -110,7 +140,18 @@ class ToolList extends ConsumerWidget {
             allTools: tools,
           ),
         ],
-        const SizedBox(height: 8),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 8, 4, 8),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              '${tools.length} of $totalCount tools',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+        ),
         Expanded(
           child: tools.isEmpty
               ? const EmptyState(
@@ -129,66 +170,124 @@ class ToolList extends ConsumerWidget {
                         if (r.enabled && r.matches(t.server, t.tool)) r,
                     ].length;
                     final hidden = rules.overrides[key]?.hidden == true;
-                    return ListTile(
-                      dense: true,
-                      selected: selectMode ? isChecked : isFocused,
-                      selectedTileColor: Theme.of(context).colorScheme.primary
-                          .withValues(alpha: 0.12),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      leading: selectMode
-                          ? Checkbox(
-                              value: isChecked,
-                              onChanged: (_) => onToggle(key),
-                            )
-                          : null,
-                      title: Text(t.tool.name, overflow: TextOverflow.ellipsis),
-                      subtitle: Text(
-                        '${t.server.name}${t.tool.description == null ? '' : ' · ${t.tool.description}'}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (hidden)
-                            const Tooltip(
-                              message: 'Hidden from the Operator',
-                              child: Icon(
-                                Icons.visibility_off_outlined,
-                                size: 16,
-                                color: StatusColors.muted,
-                              ),
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: Material(
+                        color: isFocused || (selectMode && isChecked)
+                            ? Theme.of(context).colorScheme.primary
+                                  .withValues(alpha: 0.09)
+                            : Theme.of(context).colorScheme.surfaceContainerLow,
+                        borderRadius: BorderRadius.circular(10),
+                        clipBehavior: Clip.antiAlias,
+                        child: ListTile(
+                          key: ValueKey('tool-row-$key'),
+                          dense: false,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 6,
+                          ),
+                          selected: selectMode ? isChecked : isFocused,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            side: BorderSide(
+                              color: isFocused
+                                  ? Theme.of(context).colorScheme.primary
+                                        .withValues(alpha: 0.5)
+                                  : Theme.of(context).colorScheme.outlineVariant
+                                        .withValues(alpha: 0.4),
                             ),
-                          if (ruleCount > 0)
-                            Padding(
-                              padding: const EdgeInsets.only(left: 6),
-                              child: Tooltip(
-                                message:
-                                    '$ruleCount rule${ruleCount == 1 ? '' : 's'} apply',
-                                child: StatusChip(
-                                  '$ruleCount',
-                                  StatusColors.info,
-                                  icon: Icons.rule,
+                          ),
+                          leading: selectMode
+                              ? Checkbox(
+                                  value: isChecked,
+                                  onChanged: (_) => onToggle(key),
+                                )
+                              : null,
+                          title: Text(
+                            t.tool.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodyMedium
+                                ?.copyWith(fontWeight: FontWeight.w600),
+                          ),
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const SizedBox(height: 3),
+                              Text(
+                                t.server.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.labelSmall
+                                    ?.copyWith(
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .primary,
+                                    ),
+                              ),
+                              if (t.tool.description?.isNotEmpty == true) ...[
+                                const SizedBox(height: 3),
+                                Text(
+                                  t.tool.description!,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context).textTheme.bodySmall
+                                      ?.copyWith(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurfaceVariant,
+                                      ),
+                                ),
+                              ],
+                            ],
+                          ),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (hidden)
+                                const Tooltip(
+                                  message: 'Hidden from the Operator',
+                                  child: Icon(
+                                    Icons.visibility_off_outlined,
+                                    size: 16,
+                                    color: StatusColors.muted,
+                                  ),
+                                ),
+                              if (ruleCount > 0)
+                                Padding(
+                                  padding: const EdgeInsets.only(left: 6),
+                                  child: Tooltip(
+                                    message:
+                                        '$ruleCount rule${ruleCount == 1 ? '' : 's'} apply',
+                                    child: StatusChip(
+                                      '$ruleCount',
+                                      StatusColors.info,
+                                      icon: Icons.rule,
+                                    ),
+                                  ),
+                                ),
+                              Padding(
+                                padding: const EdgeInsets.only(left: 6),
+                                child: Tooltip(
+                                  message: t.tool.isReadOnly
+                                      ? 'Read-only'
+                                      : 'May modify data',
+                                  child: Icon(
+                                    t.tool.isReadOnly
+                                        ? Icons.visibility_outlined
+                                        : Icons.edit_note_outlined,
+                                    size: 16,
+                                    color: t.tool.isReadOnly
+                                        ? StatusColors.ok
+                                        : StatusColors.warn,
+                                  ),
                                 ),
                               ),
-                            ),
-                          if (t.tool.isReadOnly)
-                            const Padding(
-                              padding: EdgeInsets.only(left: 6),
-                              child: Tooltip(
-                                message: 'Read-only',
-                                child: Icon(
-                                  Icons.visibility_outlined,
-                                  size: 16,
-                                  color: StatusColors.ok,
-                                ),
-                              ),
-                            ),
-                        ],
+                            ],
+                          ),
+                          onTap: () => selectMode ? onToggle(key) : onOpen(t),
+                        ),
                       ),
-                      onTap: () => selectMode ? onToggle(key) : onOpen(t),
                     );
                   },
                 ),

@@ -25,6 +25,7 @@ class ToolsPage extends ConsumerStatefulWidget {
 class _ToolsPageState extends ConsumerState<ToolsPage> {
   String _query = '';
   String? _serverId;
+  ToolListFilter _filter = ToolListFilter.all;
   String? _focusedKey;
   bool _selectMode = false;
   final Set<String> _selected = {};
@@ -32,14 +33,23 @@ class _ToolsPageState extends ConsumerState<ToolsPage> {
   @override
   Widget build(BuildContext context) {
     final hub = ref.watch(mcpHubProvider);
-    final ruleCount = ref.watch(toolRulesProvider).rules.length;
+    final rules = ref.watch(toolRulesProvider);
+    final ruleCount = rules.rules.length;
     final all = hub.availableTools;
     final tools = [
       for (final t in all)
         if ((_serverId == null || t.server.id == _serverId) &&
             (_query.isEmpty ||
                 t.tool.name.toLowerCase().contains(_query) ||
-                (t.tool.description ?? '').toLowerCase().contains(_query)))
+                (t.tool.description ?? '').toLowerCase().contains(_query) ||
+                t.tool.displayName.toLowerCase().contains(_query)) &&
+            switch (_filter) {
+              ToolListFilter.all => true,
+              ToolListFilter.readOnly => t.tool.isReadOnly,
+              ToolListFilter.mayModify => !t.tool.isReadOnly,
+              ToolListFilter.hidden =>
+                rules.overrides[ToolList.keyOf(t)]?.hidden == true,
+            })
           t,
     ];
     ToolRef? focused;
@@ -55,6 +65,8 @@ class _ToolsPageState extends ConsumerState<ToolsPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            _ToolSummary(tools: all, servers: hub.connectedCount),
+            const SizedBox(height: 12),
             TabBar(
               isScrollable: true,
               tabAlignment: TabAlignment.start,
@@ -107,6 +119,9 @@ class _ToolsPageState extends ConsumerState<ToolsPage> {
           focusedKey: _focusedKey,
           selectMode: _selectMode,
           selected: _selected,
+          filter: _filter,
+          totalCount: all.length,
+          onFilter: (value) => setState(() => _filter = value),
           onQuery: (v) => setState(() => _query = v.trim().toLowerCase()),
           onServer: (v) => setState(() => _serverId = v),
           onSelectMode: (on) => setState(() {
@@ -150,19 +165,213 @@ class _ToolsPageState extends ConsumerState<ToolsPage> {
           left: list,
           right: Padding(
             padding: const EdgeInsets.only(left: 12),
-            child: focused == null
-                ? const EmptyState(
-                    icon: Icons.touch_app_outlined,
-                    title: 'Select a tool',
-                    message: 'Test it, compare its schema, and see what the Operator gets.',
-                  )
-                : ToolDetail(
-                    key: ValueKey(ToolList.keyOf(focused)),
-                    toolRef: focused,
-                  ),
+            child: Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: focused == null
+                    ? _ToolExplorer(
+                        tools: all,
+                        onOpen: (tool) =>
+                            setState(() => _focusedKey = ToolList.keyOf(tool)),
+                      )
+                    : ToolDetail(
+                        key: ValueKey(ToolList.keyOf(focused)),
+                        toolRef: focused,
+                      ),
+              ),
+            ),
           ),
         );
       },
+    );
+  }
+}
+
+/// Small overview to replace the otherwise unused detail pane before a tool
+/// is selected. Counts are derived from live MCP annotations, never guessed.
+class _ToolSummary extends StatelessWidget {
+  const _ToolSummary({required this.tools, required this.servers});
+  final List<ToolRef> tools;
+  final int servers;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Theme.of(context).colorScheme.onSurfaceVariant;
+    final readOnly = tools.where((t) => t.tool.isReadOnly).length;
+    return Wrap(
+      key: const ValueKey('mcp-tool-summary'),
+      spacing: 22,
+      runSpacing: 8,
+      children: [
+        _SummaryItem(Icons.build_outlined, '${tools.length} discovered', color),
+        _SummaryItem(Icons.dns_outlined, '$servers connected', color),
+        _SummaryItem(
+          Icons.visibility_outlined,
+          '$readOnly read-only',
+          StatusColors.ok,
+        ),
+        _SummaryItem(
+          Icons.edit_note_outlined,
+          '${tools.length - readOnly} may modify',
+          StatusColors.warn,
+        ),
+      ],
+    );
+  }
+}
+
+class _SummaryItem extends StatelessWidget {
+  const _SummaryItem(this.icon, this.label, this.color);
+  final IconData icon;
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Icon(icon, size: 16, color: color),
+      const SizedBox(width: 6),
+      Text(label, style: Theme.of(context).textTheme.bodySmall),
+    ],
+  );
+}
+
+class _ToolExplorer extends StatelessWidget {
+  const _ToolExplorer({required this.tools, required this.onOpen});
+  final List<ToolRef> tools;
+  final ValueChanged<ToolRef> onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final servers = <String, int>{};
+    for (final t in tools) {
+      servers[t.server.name] = (servers[t.server.name] ?? 0) + 1;
+    }
+    return SingleChildScrollView(
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 700),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  Icons.account_tree_outlined,
+                  size: 34,
+                  color: theme.colorScheme.primary,
+                ),
+                const SizedBox(height: 14),
+                Text(
+                  'Explore your MCP tools',
+                  style: theme.textTheme.headlineSmall,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Choose a tool to inspect its inputs, run a test call, and see exactly what the Operator can access.',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 22),
+                Text(
+                  'CONNECTED COLLECTIONS',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                for (final entry in servers.entries.take(5))
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 7),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.dns_outlined,
+                          size: 17,
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            entry.key,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        Text(
+                          '${entry.value} tools',
+                          style: theme.textTheme.bodySmall,
+                        ),
+                      ],
+                    ),
+                  ),
+                const SizedBox(height: 18),
+                const Divider(),
+                const SizedBox(height: 14),
+                for (final guide in [
+                  (
+                    Icons.play_circle_outline,
+                    'Test',
+                    'Run tools with editable JSON arguments.',
+                  ),
+                  (
+                    Icons.data_object_outlined,
+                    'Schema',
+                    'Compare the original schema with rule changes.',
+                  ),
+                  (
+                    Icons.smart_toy_outlined,
+                    'Operator view',
+                    'Review visibility, rules and instructions.',
+                  ),
+                ])
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 14),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          guide.$1,
+                          size: 20,
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text.rich(
+                            TextSpan(
+                              children: [
+                                TextSpan(
+                                  text: '${guide.$2}  ',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                TextSpan(text: guide.$3),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                if (tools.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  FilledButton.tonalIcon(
+                    key: const ValueKey('open-first-tool'),
+                    onPressed: () => onOpen(tools.first),
+                    icon: const Icon(Icons.arrow_forward, size: 18),
+                    label: const Text('Inspect first tool'),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
