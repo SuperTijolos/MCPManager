@@ -351,7 +351,7 @@ void main() {
     );
 
     test(
-      'a failed SSE read cancels safely and the next request reconnects',
+      'a failed SSE read is not cancelled and the next request reconnects',
       () async {
         final server = _server();
         final client = McpSseClient(
@@ -362,13 +362,15 @@ void main() {
         server.failStream(StateError('The browser stream lost its connection'));
         await pumpEventQueue();
         expect(client.isConnected, isFalse);
-        expect(server.streamsCancelled, 1);
+        // Cancelling an errored browser reader rejects a JS promise, which the
+        // debugger reports as an uncaught exception, so we must not try.
+        expect(server.streamsCancelled, 0);
 
         expect((await client.callTool('fast', {})).text, 'fast done');
         expect(server.sessions, 2);
         client.close();
         await pumpEventQueue();
-        expect(server.streamsCancelled, 2);
+        expect(server.streamsCancelled, 1, reason: 'only the healthy stream');
       },
     );
 

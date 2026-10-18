@@ -200,9 +200,11 @@ class McpSseClient implements McpConnection {
           onError: (Object e, StackTrace stack) {
             if (generation != _generation) return;
             _onStreamEnd(generation, '$e');
-            // Explicitly handle the cancellation Future. The browser's
-            // ReadableStream reader may reject cancel() after a network error.
-            _cancelSubscription();
+            // Do not cancel: the stream already failed and will close on its
+            // own. In the browser, reader.cancel() on an errored stream
+            // rejects its JS promise, which the debugger reports as an
+            // uncaught exception even though package:http swallows it.
+            _subscription = null;
           },
           onDone: () =>
               _onStreamEnd(generation, 'Connection closed by the server.'),
