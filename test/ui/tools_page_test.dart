@@ -145,6 +145,15 @@ void main() {
     final picker = find.byType(DropdownMenu<String>);
     expect(picker, findsOneWidget);
     expect(find.byType(ChoiceChip), findsNothing);
+    final selectorTop = tester.getTopLeft(picker).dy;
+    final safetyFiltersTop = tester
+        .getTopLeft(find.byKey(const ValueKey('tool-filter-all')))
+        .dy;
+    expect(
+      selectorTop,
+      lessThan(safetyFiltersTop),
+      reason: 'MCP server selection must appear before safety filters',
+    );
     expect(find.text('8 of 8 tools'), findsOneWidget);
 
     await tester.tap(picker);
@@ -186,6 +195,12 @@ void main() {
     final picker = find.byType(DropdownMenu<String>);
     expect(picker, findsOneWidget);
     expect(tester.getSize(picker).width, lessThanOrEqualTo(390));
+    expect(
+      tester.getTopLeft(picker).dy,
+      lessThan(
+        tester.getTopLeft(find.byKey(const ValueKey('tool-filter-all'))).dy,
+      ),
+    );
     await tester.tap(picker);
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);

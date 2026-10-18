@@ -85,29 +85,8 @@ class ToolList extends ConsumerWidget {
                   ),
           ],
         ),
-        const SizedBox(height: 10),
-        Wrap(
-          spacing: 6,
-          runSpacing: 4,
-          children: [
-            for (final value in ToolListFilter.values)
-              FilterChip(
-                key: ValueKey('tool-filter-${value.name}'),
-                label: Text(switch (value) {
-                  ToolListFilter.all => 'All',
-                  ToolListFilter.readOnly => 'Read-only',
-                  ToolListFilter.mayModify => 'May modify',
-                  ToolListFilter.hidden => 'Hidden',
-                }),
-                visualDensity: VisualDensity.compact,
-                selected: filter == value,
-                showCheckmark: false,
-                onSelected: (_) => onFilter(value),
-              ),
-          ],
-        ),
         if (servers.length > 1) ...[
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
           LayoutBuilder(
             builder: (context, constraints) => DropdownMenu<String>(
               key: ValueKey('mcp-server-picker-${serverId ?? 'all'}'),
@@ -139,6 +118,27 @@ class ToolList extends ConsumerWidget {
             ),
           ),
         ],
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 6,
+          runSpacing: 4,
+          children: [
+            for (final value in ToolListFilter.values)
+              FilterChip(
+                key: ValueKey('tool-filter-${value.name}'),
+                label: Text(switch (value) {
+                  ToolListFilter.all => 'All',
+                  ToolListFilter.readOnly => 'Read-only',
+                  ToolListFilter.mayModify => 'May modify',
+                  ToolListFilter.hidden => 'Hidden',
+                }),
+                visualDensity: VisualDensity.compact,
+                selected: filter == value,
+                showCheckmark: false,
+                onSelected: (_) => onFilter(value),
+              ),
+          ],
+        ),
         if (selectMode) ...[
           const SizedBox(height: 8),
           _BulkBar(
