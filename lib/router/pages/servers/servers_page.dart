@@ -101,7 +101,7 @@ class _ServersPageState extends ConsumerState<ServersPage> {
                                     crossAxisCount: columns,
                                     crossAxisSpacing: 12,
                                     mainAxisSpacing: 12,
-                                    mainAxisExtent: 304,
+                                    mainAxisExtent: 296,
                                   ),
                               itemCount: servers.length,
                               itemBuilder: (context, index) => _ServerCard(
@@ -367,15 +367,6 @@ class _ServerCard extends ConsumerWidget {
                     ),
                   ],
                 ),
-              )
-            else
-              Text(
-                runtime.info == null
-                    ? 'Awaiting server information'
-                    : runtime.info!.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: muted,
               ),
             const Spacer(),
             Divider(height: 1, color: theme.dividerColor),

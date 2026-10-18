@@ -209,12 +209,13 @@ void main() {
       reason: 'scheme added automatically',
     );
     expect(find.text('Connected'), findsOneWidget);
-    expect(find.text('fake'), findsOneWidget);
     expect(
-      find.textContaining('fake 1.2.3'),
+      find.text('fake'),
       findsNothing,
-      reason: 'the software version is available in connection details only',
+      reason:
+          'software names and versions are only shown in connection details',
     );
+    expect(find.textContaining('fake 1.2.3'), findsNothing);
   });
 
   testWidgets('tools workbench runs a tool and shows the result', (

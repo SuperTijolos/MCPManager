@@ -83,6 +83,18 @@ void main() {
     expect(find.byTooltip('Copy endpoint'), findsNWidgets(3));
   });
 
+  testWidgets('cards never repeat server software details below metrics', (
+    tester,
+  ) async {
+    await _withServers(tester, const Size(1280, 900));
+    expect(find.text('fake'), findsNothing);
+    expect(find.textContaining('fake 1.2.3'), findsNothing);
+    expect(find.text('Awaiting server information'), findsNothing);
+    await tester.tap(find.byTooltip('Connection details').first);
+    await tester.pumpAndSettle();
+    expect(find.text('fake 1.2.3'), findsWidgets);
+  });
+
   testWidgets('the endpoint copy action copies the full URL', (tester) async {
     String? copied;
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
