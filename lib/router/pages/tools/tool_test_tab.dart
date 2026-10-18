@@ -8,6 +8,7 @@ import '../../../engine/mcp/mcp_models.dart';
 import '../../../engine/mcp/schema.dart';
 import '../../../engine/rules/tool_rules.dart';
 import '../../../engine/rules/tool_rules_store.dart';
+import '../../../ui/json_syntax.dart';
 import '../../../ui/theme.dart';
 import '../../../ui/widgets.dart';
 
@@ -26,7 +27,7 @@ class ToolTestTab extends ConsumerStatefulWidget {
 }
 
 class _ToolTestTabState extends ConsumerState<ToolTestTab> {
-  late final TextEditingController _args = TextEditingController();
+  late final JsonEditingController _args = JsonEditingController();
   bool _applyRules = true;
   McpToolResult? _result;
   Json? _forwarded;

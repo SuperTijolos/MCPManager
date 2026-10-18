@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../engine/core/json.dart';
+import 'json_syntax.dart';
 import 'theme.dart';
 
 class PageScaffold extends StatelessWidget {
@@ -159,10 +160,16 @@ class StatusChip extends StatelessWidget {
 
 /// Selectable, scrollable monospace block for JSON, logs and tool output.
 class CodeBlock extends StatefulWidget {
-  const CodeBlock(this.text, {super.key, this.maxHeight = 260});
+  const CodeBlock(
+    this.text, {
+    super.key,
+    this.maxHeight = 260,
+    this.json = false,
+  });
 
   final String text;
   final double maxHeight;
+  final bool json;
 
   @override
   State<CodeBlock> createState() => _CodeBlockState();
@@ -201,14 +208,23 @@ class _CodeBlockState extends State<CodeBlock> {
               child: SingleChildScrollView(
                 controller: _scrollController,
                 padding: const EdgeInsets.all(10),
-                child: SelectableText(
-                  widget.text.isEmpty ? '(empty)' : widget.text,
-                  style: const TextStyle(
-                    fontFamilyFallback: monoFonts,
-                    fontSize: 12.5,
-                    height: 1.4,
-                  ),
-                ),
+                child: widget.json && widget.text.isNotEmpty
+                    ? SelectableText.rich(
+                        JsonSyntax.highlight(widget.text),
+                        style: const TextStyle(
+                          fontFamilyFallback: monoFonts,
+                          fontSize: 12.5,
+                          height: 1.4,
+                        ),
+                      )
+                    : SelectableText(
+                        widget.text.isEmpty ? '(empty)' : widget.text,
+                        style: const TextStyle(
+                          fontFamilyFallback: monoFonts,
+                          fontSize: 12.5,
+                          height: 1.4,
+                        ),
+                      ),
               ),
             ),
           ),
@@ -246,7 +262,7 @@ class JsonBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) =>
-      CodeBlock(prettyJson(value), maxHeight: maxHeight);
+      CodeBlock(prettyJson(value), maxHeight: maxHeight, json: true);
 }
 
 String formatTime(DateTime t) {

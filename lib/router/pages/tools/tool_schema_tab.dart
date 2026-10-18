@@ -76,8 +76,10 @@ class _ToolSchemaTabState extends ConsumerState<ToolSchemaTab> {
                 : 'No rule changes this tool.',
         }, style: Theme.of(context).textTheme.bodySmall),
         const SizedBox(height: 10),
-        if (_view == _View.original) CodeBlock(original, maxHeight: 520),
-        if (_view == _View.effective) CodeBlock(operator, maxHeight: 520),
+        if (_view == _View.original)
+          CodeBlock(original, maxHeight: 520, json: true),
+        if (_view == _View.effective)
+          CodeBlock(operator, maxHeight: 520, json: true),
         if (_view == _View.diff) _DiffView(lineDiff(original, operator)),
         if (_view != _View.original && effective.warnings.isNotEmpty) ...[
           const SizedBox(height: 12),

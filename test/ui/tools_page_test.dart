@@ -9,6 +9,8 @@ import 'package:mcp_manager/engine/rules/tool_rules_store.dart';
 
 import 'package:mcp_manager/router/pages/tools/rule_dialog.dart';
 import 'package:mcp_manager/router/pages/tools/tool_list.dart';
+import 'package:mcp_manager/ui/json_syntax.dart';
+import 'package:mcp_manager/ui/widgets.dart';
 
 import '../support/app_harness.dart';
 import '../support/fakes.dart';
@@ -289,6 +291,26 @@ void main() {
         expect(find.text('contents of /a.txt'), findsOneWidget);
       },
     );
+
+    testWidgets('JSON editor and Schema previews use syntax coloring', (
+      tester,
+    ) async {
+      await _open(tester);
+      await _pickTool(tester, 'read_file');
+      final editor = tester.widget<TextField>(find.byType(TextField).last);
+      expect(editor.controller, isA<JsonEditingController>());
+      expect(editor.controller!.text, '{}');
+      await tester.enterText(find.byType(TextField).last, '{"path": "/test"}');
+      expect(editor.controller!.text, '{"path": "/test"}');
+      await tester.tap(find.widgetWithText(Tab, 'Schema'));
+      await tester.pumpAndSettle();
+      final schemaBlock = tester.widget<CodeBlock>(
+        find.byType(CodeBlock).first,
+      );
+      expect(schemaBlock.json, isTrue);
+      expect(schemaBlock.text, contains('inputSchema'));
+      expect(tester.takeException(), isNull);
+    });
 
     testWidgets(
       'Schema: original, what the Operator sees, and the diff once a rule applies',
