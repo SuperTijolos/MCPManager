@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mcp_manager/ui/widgets.dart';
 
@@ -9,6 +10,7 @@ import '../support/app_harness.dart';
 Map<String, Object> _savedConversation({
   String status = 'done',
   String? result = '{"count": 2, "ok": true}',
+  bool assistantReply = false,
 }) {
   const id = 'operator-test';
   return {
@@ -35,6 +37,13 @@ Map<String, Object> _savedConversation({
           'status': status,
           'output': result,
         },
+        if (assistantReply)
+          {
+            'type': 'assistant',
+            'id': 'assistant-1',
+            'text': 'Found two MCP tools.',
+            'thinking': 'I should inspect the available MCP tools.',
+          },
       ],
       'history': [],
     }),
@@ -70,6 +79,48 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('Operator can hide and restore thinking without hiding answers', (
+    tester,
+  ) async {
+    await pumpApp(tester, prefs: _savedConversation(assistantReply: true));
+    await goTo(tester, '/chat');
+    expect(find.text('Thinking'), findsOneWidget);
+    expect(find.text('Found two MCP tools.'), findsOneWidget);
+    await tester.tap(find.text('Hide thinking'));
+    await tester.pumpAndSettle();
+    expect(find.text('Thinking'), findsNothing);
+    expect(find.text('Found two MCP tools.'), findsOneWidget);
+    await tester.tap(find.text('Show thinking'));
+    await tester.pumpAndSettle();
+    expect(find.text('Thinking'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('copy response copies the assistant text only', (tester) async {
+    String? copied;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copied = (call.arguments as Map)['text'] as String;
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+    await pumpApp(tester, prefs: _savedConversation(assistantReply: true));
+    await goTo(tester, '/chat');
+    await tester.tap(find.byTooltip('Copy response'));
+    await tester.pump();
+    expect(copied, 'Found two MCP tools.');
+    expect(find.text('Response copied'), findsOneWidget);
+  });
 
   testWidgets('failed MCP results remain accessible on small screens', (
     tester,

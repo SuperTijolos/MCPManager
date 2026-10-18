@@ -54,6 +54,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   }
 
   bool _historyOpen = true;
+  bool _showThinking = true;
 
   Widget _conversation(ChatState chat, LlmSettings settings) => Column(
     children: [
@@ -83,6 +84,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                           chat.items[i],
                           isLast: i == chat.items.length - 1,
                           running: chat.running,
+                          showThinking: _showThinking,
                         ),
                       ),
                     ),
@@ -96,9 +98,30 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 820),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: const _ApprovalToggle(),
+            child: Wrap(
+              alignment: WrapAlignment.start,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 10,
+              runSpacing: 4,
+              children: [
+                const _ApprovalToggle(),
+                if (chat.items.whereType<AssistantItem>().any(
+                  (item) => item.thinking.isNotEmpty,
+                ))
+                  TextButton.icon(
+                    onPressed: () =>
+                        setState(() => _showThinking = !_showThinking),
+                    icon: Icon(
+                      _showThinking
+                          ? Icons.visibility_off_outlined
+                          : Icons.visibility_outlined,
+                      size: 17,
+                    ),
+                    label: Text(
+                      _showThinking ? 'Hide thinking' : 'Show thinking',
+                    ),
+                  ),
+              ],
             ),
           ),
         ),
@@ -327,10 +350,16 @@ class _Welcome extends StatelessWidget {
 }
 
 class _ItemView extends StatelessWidget {
-  const _ItemView(this.item, {required this.isLast, required this.running});
+  const _ItemView(
+    this.item, {
+    required this.isLast,
+    required this.running,
+    required this.showThinking,
+  });
   final ChatItem item;
   final bool isLast;
   final bool running;
+  final bool showThinking;
 
   @override
   Widget build(BuildContext context) {
@@ -348,7 +377,11 @@ class _ItemView extends StatelessWidget {
           child: SelectableText(text),
         ),
       ),
-      final AssistantItem a => _AssistantView(a, streaming: isLast && running),
+      final AssistantItem a => _AssistantView(
+        a,
+        streaming: isLast && running,
+        showThinking: showThinking,
+      ),
       final ToolItem t => _ToolCard(
         key: ValueKey('tool-card-${t.id}'),
         item: t,
@@ -374,9 +407,14 @@ class _ItemView extends StatelessWidget {
 }
 
 class _AssistantView extends StatelessWidget {
-  const _AssistantView(this.item, {required this.streaming});
+  const _AssistantView(
+    this.item, {
+    required this.streaming,
+    required this.showThinking,
+  });
   final AssistantItem item;
   final bool streaming;
+  final bool showThinking;
 
   @override
   Widget build(BuildContext context) {
@@ -395,7 +433,7 @@ class _AssistantView extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (item.thinking.isNotEmpty)
+        if (showThinking && item.thinking.isNotEmpty)
           Theme(
             data: theme.copyWith(dividerColor: Colors.transparent),
             child: ExpansionTile(
@@ -420,9 +458,22 @@ class _AssistantView extends StatelessWidget {
               ],
             ),
           ),
-        if (item.text.isNotEmpty)
-          MarkdownBody(data: item.text, selectable: true, styleSheet: style)
-        else if (streaming && item.thinking.isEmpty)
+        if (item.text.isNotEmpty) ...[
+          MarkdownBody(data: item.text, selectable: true, styleSheet: style),
+          Align(
+            alignment: Alignment.centerRight,
+            child: IconButton(
+              tooltip: 'Copy response',
+              visualDensity: VisualDensity.compact,
+              iconSize: 17,
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: item.text));
+                showSnack(context, 'Response copied');
+              },
+              icon: const Icon(Icons.copy_outlined),
+            ),
+          ),
+        ] else if (streaming && item.thinking.isEmpty)
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 6),
             child: SizedBox(
