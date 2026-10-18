@@ -367,6 +367,11 @@ void main() {
     ) async {
       await _open(tester);
       await _section(tester, 'Operator');
+      await tester.scrollUntilVisible(
+        find.text('The built-in system prompt'),
+        200,
+        scrollable: find.byType(Scrollable).last,
+      );
       await _tapVisible(tester, find.text('The built-in system prompt'));
       expect(
         find.textContaining('You are the Operator of MCP Manager'),

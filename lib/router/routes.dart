@@ -24,12 +24,7 @@ const mainDestinations = [
   AppDestination('/', 'Overview', Icons.dashboard_outlined, Icons.dashboard),
   AppDestination('/mcp-servers', 'MCP Servers', Icons.dns_outlined, Icons.dns),
   AppDestination('/mcp-tools', 'MCP Tools', Icons.build_outlined, Icons.build),
-  AppDestination(
-    '/chat',
-    'Operator',
-    Icons.smart_toy_outlined,
-    Icons.smart_toy,
-  ),
+  AppDestination('/chat', 'Chat', Icons.chat_bubble_outline, Icons.chat_bubble),
   AppDestination(
     '/audit',
     'Audit',
@@ -78,7 +73,7 @@ GoRouter createRouter() => GoRouter(
         GoRoute(path: '/tools', redirect: (c, s) => '/mcp-tools'),
         GoRoute(
           path: '/chat',
-          name: 'Operator',
+          name: 'Chat',
           pageBuilder: (c, s) => _page(const ChatPage(), s),
         ),
         GoRoute(

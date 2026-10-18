@@ -91,6 +91,21 @@ class _OperatorSectionState extends ConsumerState<OperatorSection> {
                   onChanged: (v) =>
                       store.update((s) => s.copyWith(confirmReadOnly: v)),
                 ),
+                const Divider(height: 28),
+                SwitchListTile(
+                  key: const ValueKey('auto-compact-switch'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Compact long conversations automatically'),
+                  subtitle: const Text(
+                    'When a chat nears the model\'s context window, old tool '
+                    'results are shortened and earlier messages summarized so '
+                    'the model keeps working instead of failing. You can '
+                    'also compact by hand from the chat toolbar.',
+                  ),
+                  value: settings.autoCompact,
+                  onChanged: (v) =>
+                      store.update((s) => s.copyWith(autoCompact: v)),
+                ),
               ],
             ),
           ),

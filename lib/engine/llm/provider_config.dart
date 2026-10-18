@@ -53,6 +53,10 @@ bool providerRequiresApiKey(ProviderKind kind, String url) {
 /// provider without an explicit setting asks for this much.
 const defaultOllamaContext = 16384;
 
+/// What a provider without an explicit setting is assumed to accept for cloud
+/// APIs, whose real window depends on the model and is not reported.
+const defaultCloudContext = 128000;
+
 enum ProviderKind {
   ollama('Ollama'),
   openaiCompatible('OpenAI-compatible');
@@ -90,6 +94,13 @@ class ProviderConfig {
   /// Ollama only: the `num_ctx` window to request. Ollama's own default is
   /// small, and the Operator's tool list alone needs a few thousand tokens.
   final int? contextLength;
+
+  /// The window the app plans conversations around.
+  int get effectiveContext =>
+      contextLength ??
+      (kind == ProviderKind.ollama
+          ? defaultOllamaContext
+          : defaultCloudContext);
 
   ProviderConfig copyWith({
     String? name,

@@ -89,7 +89,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(c.read(chatControllerProvider).items, isEmpty);
       expect(c.read(chatControllerProvider).conversations, hasLength(3));
-      expect(find.text('Operator'), findsWidgets);
+      expect(find.text('Chat with your tools'), findsOneWidget);
     });
 
     testWidgets('search filters the list', (tester) async {

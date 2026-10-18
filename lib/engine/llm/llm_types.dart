@@ -65,6 +65,17 @@ class LlmMessage {
   final String? toolCallId;
   final String? toolName;
 
+  /// The same message with other text and/or without its reasoning.
+  LlmMessage copyWith({String? content, bool dropThinking = false}) =>
+      LlmMessage(
+        role: role,
+        content: content ?? this.content,
+        thinking: dropThinking ? null : thinking,
+        toolCalls: toolCalls,
+        toolCallId: toolCallId,
+        toolName: toolName,
+      );
+
   Json toJson() => {
     'role': role.name,
     'content': content,

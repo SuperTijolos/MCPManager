@@ -381,9 +381,9 @@ class _WorkspaceBanner extends StatelessWidget {
         ? 'Workspace ready'
         : 'Servers connected';
     final summary = noServers
-        ? 'Add a server to discover tools and start using your Operator.'
+        ? 'Add a server to discover tools and start chatting with them.'
         : '$connected of $enabled servers connected · $toolCount tools ready'
-              ' · Operator ${modelReady ? 'configured' : 'not configured'}';
+              ' · Chat model ${modelReady ? 'ready' : 'not set up'}';
 
     final actions = Wrap(
       spacing: 10,
@@ -401,10 +401,10 @@ class _WorkspaceBanner extends StatelessWidget {
         OutlinedButton.icon(
           onPressed: () => context.go(modelReady ? '/chat' : '/settings'),
           icon: Icon(
-            modelReady ? Icons.smart_toy_outlined : Icons.tune_outlined,
+            modelReady ? Icons.chat_bubble_outline : Icons.tune_outlined,
             size: 18,
           ),
-          label: Text(modelReady ? 'Open Operator' : 'Configure Operator'),
+          label: Text(modelReady ? 'Open chat' : 'Set up a model'),
         ),
       ],
     );
@@ -513,8 +513,8 @@ class _QuickActionsPanel extends StatelessWidget {
           ),
           const Divider(height: 1),
           const _QuickAction(
-            icon: Icons.smart_toy_outlined,
-            title: 'Ask the Operator',
+            icon: Icons.chat_bubble_outline,
+            title: 'Chat with your tools',
             subtitle: 'Use your tools through chat',
             route: '/chat',
           ),
@@ -1434,10 +1434,7 @@ class _ModelCardState extends ConsumerState<_ModelCard> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Operator model',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
+            Text('Chat model', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
             Text(
               s.isReady ? '${s.activeModel}' : 'Not configured',

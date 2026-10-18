@@ -65,8 +65,8 @@ class InfoPage extends ConsumerWidget {
                   ),
                   tile(
                     _Feature(
-                      icon: Icons.smart_toy_outlined,
-                      title: 'Operator',
+                      icon: Icons.chat_bubble_outline,
+                      title: 'Chat',
                       route: '/chat',
                       body:
                           'Chat with Gemma 4 (through Ollama) or any OpenAI-compatible model. It can inspect and manage your '

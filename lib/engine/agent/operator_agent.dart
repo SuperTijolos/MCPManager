@@ -1,5 +1,6 @@
 import '../llm/llm_types.dart';
 import 'agent_tool.dart';
+import 'context_budget.dart';
 import 'tool_insight.dart';
 import 'toolbox.dart';
 
@@ -64,9 +65,22 @@ class AgentToolFinished extends AgentEvent {
 }
 
 class AgentUsage extends AgentEvent {
-  const AgentUsage({this.promptTokens, this.completionTokens});
+  const AgentUsage({
+    this.promptTokens,
+    this.completionTokens,
+    this.estimatedPromptTokens,
+  });
   final int? promptTokens;
   final int? completionTokens;
+
+  /// What we guessed before the call, to judge how far off the guess was.
+  final int? estimatedPromptTokens;
+}
+
+/// Older messages were cut down or summarized to make room.
+class AgentCompacted extends AgentEvent {
+  const AgentCompacted(this.result);
+  final CompactionResult result;
 }
 
 enum ApprovalDecision { approveOnce, approveSession, deny }
@@ -86,7 +100,15 @@ class OperatorAgent {
     this.capabilityMap = '',
     this.advisor,
     this.autoApprove = false,
+    this.compactor,
+    this.autoCompact = true,
   });
+
+  /// Keeps long conversations inside the model's window.
+  final ContextCompactor? compactor;
+
+  /// Whether [run] compacts by itself; [compact] always works.
+  final bool autoCompact;
 
   /// Runs tool calls without asking, for conversations switched to automatic.
   final bool autoApprove;
@@ -125,26 +147,46 @@ class OperatorAgent {
     return '${parts.join('\n\n')}\n';
   }
 
+  List<LlmToolSpec> get _specs => [
+    for (final t in tools)
+      LlmToolSpec(
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters,
+      ),
+  ];
+
+  /// What every request carries before any conversation: the system prompt
+  /// and the tool list (an estimate).
+  int get fixedTokens =>
+      estimateTokens(_systemPrompt) + estimateSpecTokens(_specs);
+
+  /// Compacts [history] on request, whatever its size.
+  Future<CompactionResult?> compact(List<LlmMessage> history) =>
+      compactor?.ensureFits(history, fixedTokens: fixedTokens, force: true) ??
+      Future.value();
+
   /// Appends assistant/tool messages to [history] as it goes.
   Future<void> run(
     List<LlmMessage> history,
     void Function(AgentEvent) emit,
   ) async {
     final byName = {for (final t in tools) t.name: t};
-    final specs = [
-      for (final t in tools)
-        LlmToolSpec(
-          name: t.name,
-          description: t.description,
-          parameters: t.parameters,
-        ),
-    ];
+    final specs = _specs;
+    final fixed = fixedTokens;
     final actor = 'operator:$model';
     advisor?.reset(); // a new request starts with a clean failure count
 
     for (var step = 0; step < maxSteps; step++) {
       if (isCancelled()) return;
       if (step > 0) emit(const AgentMessageStart());
+
+      final compaction = autoCompact
+          ? await compactor?.ensureFits(history, fixedTokens: fixed)
+          : null;
+      if (compaction != null) emit(AgentCompacted(compaction));
+      if (isCancelled()) return;
+      final estimated = fixed + estimateHistoryTokens(history);
 
       final text = StringBuffer();
       final thinking = StringBuffer();
@@ -165,10 +207,15 @@ class OperatorAgent {
         } else if (event is LlmToolCallsEvent) {
           calls = event.calls;
         } else if (event is LlmDone) {
+          final actual = event.promptTokens;
+          if (actual != null) {
+            compactor?.calibrate(actual: actual, estimated: estimated);
+          }
           emit(
             AgentUsage(
-              promptTokens: event.promptTokens,
+              promptTokens: actual,
               completionTokens: event.completionTokens,
+              estimatedPromptTokens: estimated,
             ),
           );
         }

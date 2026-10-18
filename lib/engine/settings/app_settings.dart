@@ -10,6 +10,7 @@ class AppSettings {
     this.maxSteps = 12,
     this.extraInstructions = '',
     this.confirmReadOnly = false,
+    this.autoCompact = true,
   });
 
   /// How many model turns one request may take (tool loop limit).
@@ -21,26 +22,34 @@ class AppSettings {
   /// Ask before running read-only tools too.
   final bool confirmReadOnly;
 
+  /// Shorten or summarize old messages before they overflow the model's
+  /// context window.
+  final bool autoCompact;
+
   AppSettings copyWith({
     int? maxSteps,
     String? extraInstructions,
     bool? confirmReadOnly,
+    bool? autoCompact,
   }) => AppSettings(
     maxSteps: maxSteps ?? this.maxSteps,
     extraInstructions: extraInstructions ?? this.extraInstructions,
     confirmReadOnly: confirmReadOnly ?? this.confirmReadOnly,
+    autoCompact: autoCompact ?? this.autoCompact,
   );
 
   Json toJson() => {
     'maxSteps': maxSteps,
     'extraInstructions': extraInstructions,
     'confirmReadOnly': confirmReadOnly,
+    'autoCompact': autoCompact,
   };
 
   factory AppSettings.fromJson(Json json) => AppSettings(
     maxSteps: ((json['maxSteps'] as num?)?.toInt() ?? 12).clamp(2, 30),
     extraInstructions: json['extraInstructions'] as String? ?? '',
     confirmReadOnly: json['confirmReadOnly'] as bool? ?? false,
+    autoCompact: json['autoCompact'] as bool? ?? true,
   );
 }
 

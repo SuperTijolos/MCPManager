@@ -68,9 +68,9 @@ void main() {
     expect(find.text('Quick actions'), findsOneWidget);
     expect(find.text('Call outcomes'), findsNothing);
     expect(find.text('Busiest tools · 24h'), findsNothing);
-    await tester.tap(find.text('Ask the Operator'));
+    await tester.tap(find.text('Chat with your tools'));
     await tester.pumpAndSettle();
-    expect(find.text('Operator'), findsWidgets);
+    expect(find.text('Chat'), findsWidgets);
     expect(tester.takeException(), isNull);
   });
 
@@ -126,7 +126,7 @@ void main() {
     final activityBottom = tester.getBottomLeft(panel('Tool activity')).dy;
     final connectionsTop = tester.getTopLeft(panel('Connection status')).dy;
     final actionsBottom = tester.getBottomLeft(panel('Quick actions')).dy;
-    final operatorTop = tester.getTopLeft(panel('Operator model')).dy;
+    final operatorTop = tester.getTopLeft(panel('Chat model')).dy;
 
     // Both columns independently stack cards with the standard 16px gap.
     expect(connectionsTop - activityBottom, closeTo(16, 1));
@@ -160,7 +160,7 @@ void main() {
         .dy;
     final activityTop = tester.getTopLeft(panel('Recent activity')).dy;
     final outcomesBottom = tester.getBottomLeft(panel('Call outcomes')).dy;
-    final operatorTop = tester.getTopLeft(panel('Operator model')).dy;
+    final operatorTop = tester.getTopLeft(panel('Chat model')).dy;
 
     expect(activityTop - connectionsBottom, closeTo(16, 1));
     expect(operatorTop - outcomesBottom, closeTo(16, 1));
@@ -268,7 +268,7 @@ void main() {
       await pumpApp(tester, server: server, llm: llm);
       await _addDemoServer(tester);
 
-      await tester.tap(find.text('Operator').first);
+      await tester.tap(find.text('Chat').first);
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField).last, 'wipe everything');
       await tester.tap(find.byIcon(Icons.arrow_upward_rounded));
@@ -358,7 +358,7 @@ void main() {
       'Overview',
       'MCP Servers',
       'MCP Tools',
-      'Operator',
+      'Chat',
       'Audit',
       'Settings',
       'About',
@@ -478,7 +478,7 @@ void main() {
       ]);
       await pumpApp(tester, oauth: world, llm: llm);
 
-      await tester.tap(find.text('Operator').first);
+      await tester.tap(find.text('Chat').first);
       await tester.pumpAndSettle();
       await tester.enterText(
         find.byType(TextField).last,

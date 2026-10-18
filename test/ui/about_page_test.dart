@@ -79,7 +79,7 @@ void main() {
       for (final feature in [
         'MCP Servers',
         'MCP Tools & rules',
-        'Operator',
+        'Chat',
         'Audit',
         'Settings',
         'Overview',

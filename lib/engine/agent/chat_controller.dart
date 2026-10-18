@@ -7,9 +7,11 @@ import '../core/json.dart';
 import '../core/prefs.dart';
 import '../llm/llm_settings.dart';
 import '../llm/llm_types.dart';
+import '../llm/provider_config.dart';
 import '../settings/app_settings.dart';
 import 'chat_store.dart';
 import 'agent_tool.dart';
+import 'context_budget.dart';
 import 'operator_agent.dart';
 import 'tool_insight.dart';
 import 'toolbox.dart';
@@ -37,6 +39,8 @@ sealed class ChatItem {
           );
         case 'error':
           return ErrorItem(id, json['message'] as String);
+        case 'notice':
+          return NoticeItem(id, json['text'] as String);
         case 'tool':
           // A call that was waiting or running when the page closed never
           // finished; show it as interrupted rather than pending forever.
@@ -154,6 +158,15 @@ class ToolItem extends ChatItem {
   };
 }
 
+/// A line from the app, not the model: "Summarized earlier messages…".
+class NoticeItem extends ChatItem {
+  const NoticeItem(super.id, this.text);
+  final String text;
+
+  @override
+  Json toJson() => {'type': 'notice', 'id': id, 'text': text};
+}
+
 class ErrorItem extends ChatItem {
   const ErrorItem(super.id, this.message);
   final String message;
@@ -169,10 +182,17 @@ class ChatState {
     this.conversations = const [],
     this.activeId,
     this.autoApprove = false,
+    this.contextUsed,
+    this.contextLimit,
   });
 
   final List<ChatItem> items;
   final bool running;
+
+  /// Prompt tokens of the latest model call and the window it ran in, for the
+  /// "context" meter. Null until a call has reported them.
+  final int? contextUsed;
+  final int? contextLimit;
 
   /// Saved conversations, most recently used first.
   final List<ConversationMeta> conversations;
@@ -190,12 +210,16 @@ class ChatState {
     String? activeId,
     bool clearActive = false,
     bool? autoApprove,
+    int? contextUsed,
+    int? contextLimit,
   }) => ChatState(
     items: items ?? this.items,
     running: running ?? this.running,
     conversations: conversations ?? this.conversations,
     activeId: clearActive ? null : activeId ?? this.activeId,
     autoApprove: autoApprove ?? this.autoApprove,
+    contextUsed: contextUsed ?? this.contextUsed,
+    contextLimit: contextLimit ?? this.contextLimit,
   );
 }
 
@@ -210,12 +234,24 @@ class ChatController extends Notifier<ChatState> {
   bool _cancelled = false;
   int _runToken = 0;
 
+  // Streamed text arrives token by token; rebuilding the transcript for each
+  // one makes long chats crawl. The first delta of a burst shows at once, the
+  // rest are gathered and shown every [_streamInterval].
+  static const _streamInterval = Duration(milliseconds: 60);
+  String _pendingText = '';
+  String _pendingThinking = '';
+  Timer? _flushTimer;
+
+  /// The "tool list is too big for this window" notice, once per conversation.
+  bool _warnedOverhead = false;
+
   ChatStore get _store => ChatStore(ref.read(sharedPreferencesProvider));
 
   @override
   ChatState build() {
     ref.onDispose(() {
       _cancelled = true;
+      _flushTimer?.cancel();
       _resolveAll(ApprovalDecision.deny);
     });
     final store = _store;
@@ -278,6 +314,13 @@ class ChatController extends Notifier<ChatState> {
     while (history.isNotEmpty && history.first.role != LlmRole.user) {
       history.removeAt(0);
     }
+    // Do not lose the summary that stands in for everything older.
+    if (_history.length > 60 &&
+        _history.length >= 2 &&
+        isCompactionSummary(_history.first) &&
+        !isCompactionSummary(history.first)) {
+      history = [_history[0], _history[1], ...history];
+    }
     store.save(
       id,
       StoredConversation(
@@ -320,6 +363,7 @@ class ChatController extends Notifier<ChatState> {
   void newConversation({bool? autoApprove}) {
     if (state.running) stop();
     _runToken++;
+    _dropPendingText();
     _history.clear();
     _sessionAllowed.clear();
     _store.setActive(null);
@@ -350,6 +394,7 @@ class ChatController extends Notifier<ChatState> {
     if (!state.conversations.any((c) => c.id == id)) return;
     if (state.running) stop();
     _runToken++;
+    _dropPendingText();
     _store.setActive(id);
     state = _load(id, state.conversations);
   }
@@ -376,6 +421,7 @@ class ChatController extends Notifier<ChatState> {
     if (wasActive) {
       if (state.running) stop();
       _runToken++;
+      _dropPendingText();
       _history.clear();
       _sessionAllowed.clear();
       _store.setActive(null);
@@ -414,10 +460,16 @@ class ChatController extends Notifier<ChatState> {
 
     final token = ++_runToken;
     _cancelled = false;
-    _history.add(LlmMessage.user(prompt));
+    final promptMessage = LlmMessage.user(prompt);
+    _history.add(promptMessage);
     // On cancel/error, drop the half-finished exchange but keep the prompt so
-    // the model's context matches what the user sees.
-    final mark = _history.length;
+    // the model's context matches what the user sees. Compaction can shift
+    // indices, so find the prompt itself.
+    void rollBack() {
+      final at = _history.lastIndexWhere((m) => identical(m, promptMessage));
+      if (at >= 0) _history.length = at + 1;
+    }
+
     state = state.copyWith(
       items: [...state.items, UserItem(newId('u'), prompt)],
       running: true,
@@ -428,8 +480,38 @@ class ChatController extends Notifier<ChatState> {
     _append(AssistantItem(newId('a')));
 
     final provider = ref.read(llmProviderFactoryProvider)(config);
+    final agent = _makeAgent(provider, config, model, token);
+    state = state.copyWith(contextLimit: config.effectiveContext);
+    _warnIfToolListIsHuge(agent, config.effectiveContext);
+
+    try {
+      await agent.run(_history, (event) => _onEvent(token, event));
+      if (_cancelled) rollBack();
+    } catch (e) {
+      rollBack();
+      if (token == _runToken) _append(ErrorItem(newId('err'), '$e'));
+    } finally {
+      provider.close();
+      if (token == _runToken) {
+        _flushText();
+        _flushTimer?.cancel();
+        _flushTimer = null;
+        _dropEmptyAssistant();
+        state = state.copyWith(running: false);
+        _persist();
+      }
+    }
+  }
+
+  OperatorAgent _makeAgent(
+    LlmProvider provider,
+    ProviderConfig config,
+    String model,
+    int token,
+  ) {
     final toolbox = buildToolboxWithInsight(ref);
-    final agent = OperatorAgent(
+    final settings = ref.read(appSettingsProvider);
+    return OperatorAgent(
       provider: provider,
       model: model,
       tools: toolbox.tools,
@@ -439,20 +521,72 @@ class ChatController extends Notifier<ChatState> {
       isCancelled: () => _cancelled || token != _runToken,
       sessionAllowed: _sessionAllowed,
       autoApprove: state.autoApprove,
-      maxSteps: ref.read(appSettingsProvider).maxSteps,
-      extraInstructions: ref.read(appSettingsProvider).extraInstructions,
+      maxSteps: settings.maxSteps,
+      extraInstructions: settings.extraInstructions,
+      // Manual "Compact" works either way; the automatic pass can be off.
+      compactor: ContextCompactor(
+        provider: provider,
+        model: model,
+        contextTokens: config.effectiveContext,
+      ),
+      autoCompact: settings.autoCompact,
     );
+  }
 
+  /// Summarizing cannot help when the tool list itself fills the window,
+  /// which is the likeliest reason a small Ollama context "blows up".
+  void _warnIfToolListIsHuge(OperatorAgent agent, int window) {
+    if (_warnedOverhead) return;
+    final fixed = agent.fixedTokens;
+    if (fixed < window * 0.45) return;
+    _warnedOverhead = true;
+    _addNotice(
+      'The instructions and tool list alone take about ${(fixed / 1000).toStringAsFixed(1)}k '
+      'of the model\'s ${(window / 1000).toStringAsFixed(0)}k-token window, leaving little room to talk. '
+      'Hide tools you do not need (MCP Tools → Select → Hide from Operator) '
+      'or raise the context length for this provider in Settings.',
+    );
+  }
+
+  /// Shows [text] before the reply that is about to stream in.
+  void _addNotice(String text) {
+    final notice = NoticeItem(newId('n'), text);
+    final items = [...state.items];
+    final last = items.isEmpty ? null : items.last;
+    if (last is AssistantItem && last.text.isEmpty && last.thinking.isEmpty) {
+      items.insert(items.length - 1, notice);
+    } else {
+      items.add(notice);
+    }
+    state = state.copyWith(items: items);
+  }
+
+  /// Summarizes the older part of the open conversation now.
+  Future<void> compactNow() async {
+    if (state.running || state.items.isEmpty) return;
+    const early = 'Nothing to compact yet: the conversation is already short.';
+    if (_history.length < 3) return _addNotice(early);
+    final settings = ref.read(llmSettingsProvider);
+    final config = settings.activeProvider;
+    final model = settings.activeModel;
+    if (config == null || model == null || model.isEmpty) return;
+
+    final token = _runToken;
+    _cancelled = false;
+    state = state.copyWith(running: true);
+    final provider = ref.read(llmProviderFactoryProvider)(config);
     try {
-      await agent.run(_history, (event) => _onEvent(token, event));
-      if (_cancelled) _history.length = mark;
-    } catch (e) {
-      _history.length = mark;
-      if (token == _runToken) _append(ErrorItem(newId('err'), '$e'));
+      final result = await _makeAgent(
+        provider,
+        config,
+        model,
+        token,
+      ).compact(_history);
+      if (token != _runToken) return;
+      _addNotice(result?.message ?? early);
     } finally {
       provider.close();
       if (token == _runToken) {
-        _dropEmptyAssistant();
         state = state.copyWith(running: false);
         _persist();
       }
@@ -494,9 +628,50 @@ class ChatController extends Notifier<ChatState> {
     if (token != _runToken) return;
     switch (event) {
       case AgentTextDelta(:final text):
-        _updateLastAssistant((a) => a.copyWith(text: a.text + text));
+        _queueText(text: text);
       case AgentThinkingDelta(:final text):
-        _updateLastAssistant((a) => a.copyWith(thinking: a.thinking + text));
+        _queueText(thinking: text);
+      default:
+        // Anything else must see the text that came before it.
+        _flushText();
+        _onStructuralEvent(event);
+    }
+  }
+
+  void _queueText({String text = '', String thinking = ''}) {
+    _pendingText += text;
+    _pendingThinking += thinking;
+    if (_flushTimer != null) return;
+    _flushText(); // leading edge: the first token appears immediately
+    _flushTimer = Timer(_streamInterval, () {
+      _flushTimer = null;
+      _flushText();
+    });
+  }
+
+  void _flushText() {
+    final text = _pendingText;
+    final thinking = _pendingThinking;
+    if (text.isEmpty && thinking.isEmpty) return;
+    _pendingText = '';
+    _pendingThinking = '';
+    _updateLastAssistant(
+      (a) => a.copyWith(text: a.text + text, thinking: a.thinking + thinking),
+    );
+  }
+
+  void _dropPendingText() {
+    _warnedOverhead = false;
+    _flushTimer?.cancel();
+    _flushTimer = null;
+    _pendingText = '';
+    _pendingThinking = '';
+  }
+
+  void _onStructuralEvent(AgentEvent event) {
+    switch (event) {
+      case AgentTextDelta() || AgentThinkingDelta():
+        break; // handled by _onEvent
       case AgentMessageStart():
         _dropEmptyAssistant();
         _append(AssistantItem(newId('a')));
@@ -530,8 +705,12 @@ class ChatController extends Notifier<ChatState> {
           ),
         );
         _append(AssistantItem(newId('a')));
-      case AgentUsage():
-        break;
+      case AgentUsage(:final promptTokens):
+        if (promptTokens != null) {
+          state = state.copyWith(contextUsed: promptTokens);
+        }
+      case AgentCompacted(:final result):
+        _addNotice(result.message);
     }
   }
 
