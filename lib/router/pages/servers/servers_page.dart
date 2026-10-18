@@ -330,7 +330,7 @@ class _ServerCard extends ConsumerWidget {
               Text(
                 runtime.info == null
                     ? 'Awaiting server information'
-                    : '${runtime.info!.name} · ${runtime.info!.version}',
+                    : '${runtime.info!.name} ${runtime.info!.version}',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: muted,
@@ -354,10 +354,10 @@ class _ServerCard extends ConsumerWidget {
                 ),
                 Expanded(child: Text('Enabled', style: muted, maxLines: 1)),
                 if (runtime.status == ServerStatus.needsAuth)
-                  IconButton(
-                    tooltip: 'Sign in',
-                    icon: const Icon(Icons.login_outlined),
+                  TextButton.icon(
                     onPressed: () => signInToServer(context, ref, config.id),
+                    icon: const Icon(Icons.login_outlined, size: 18),
+                    label: const Text('Sign in'),
                   ),
                 if (runtime.tools.isNotEmpty)
                   IconButton(

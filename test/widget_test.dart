@@ -442,6 +442,8 @@ void main() {
 
     expect(find.text('Connected'), findsOneWidget);
     expect(find.text('Sign in'), findsNothing);
+    await tester.tap(find.byTooltip('More server actions'));
+    await tester.pumpAndSettle();
     expect(find.text('Sign out'), findsOneWidget);
     expect(world.mcpAuthHeaders.last, startsWith('Bearer '));
 

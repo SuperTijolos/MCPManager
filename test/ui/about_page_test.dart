@@ -97,10 +97,7 @@ void main() {
       );
 
       await _tapVisible(tester, find.widgetWithText(TextButton, 'Open'));
-      expect(
-        find.text('Downstream MCP servers (Streamable HTTP or legacy SSE)'),
-        findsOneWidget,
-      );
+      expect(find.text('Connect and manage your MCP servers'), findsOneWidget);
     });
 
     testWidgets(
