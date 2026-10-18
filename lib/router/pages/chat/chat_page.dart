@@ -349,7 +349,10 @@ class _ItemView extends StatelessWidget {
         ),
       ),
       final AssistantItem a => _AssistantView(a, streaming: isLast && running),
-      final ToolItem t => _ToolCard(t),
+      final ToolItem t => _ToolCard(
+        key: ValueKey('tool-card-${t.id}'),
+        item: t,
+      ),
       ErrorItem(:final message) => Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
@@ -433,8 +436,12 @@ class _AssistantView extends StatelessWidget {
   }
 }
 
+/// Compact inspection card for an Operator MCP call. Arguments are collapsed
+/// for completed calls so a conversation with many calls stays readable. For
+/// calls awaiting permission they are expanded so the user can review exactly
+/// what is about to be sent before approving.
 class _ToolCard extends ConsumerWidget {
-  const _ToolCard(this.item);
+  const _ToolCard({super.key, required this.item});
   final ToolItem item;
 
   @override
@@ -452,6 +459,9 @@ class _ToolCard extends ConsumerWidget {
       ToolStatus.error => ('Failed', StatusColors.bad, Icons.error_outline),
       ToolStatus.denied => ('Denied', StatusColors.warn, Icons.block),
     };
+    final argCount = item.args.length;
+    final result = item.output;
+    final resultJson = result == null ? null : tryDecodeJson(result);
 
     return Card(
       child: Padding(
@@ -464,8 +474,17 @@ class _ToolCard extends ConsumerWidget {
                 const Icon(Icons.build_circle_outlined, size: 18),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Text(item.label, style: theme.textTheme.titleSmall),
+                  child: Tooltip(
+                    message: item.name,
+                    child: Text(
+                      item.label,
+                      style: theme.textTheme.titleSmall,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
                 ),
+                const SizedBox(width: 8),
                 StatusChip(label, color, icon: icon),
               ],
             ),
@@ -473,12 +492,29 @@ class _ToolCard extends ConsumerWidget {
               const SizedBox(height: 8),
               Text(item.summary!, style: theme.textTheme.bodyMedium),
             ],
-            const SizedBox(height: 8),
-            Text('Arguments', style: theme.textTheme.bodySmall),
             const SizedBox(height: 4),
-            JsonBlock(item.args, maxHeight: 140),
+            Theme(
+              data: theme.copyWith(dividerColor: Colors.transparent),
+              child: ExpansionTile(
+                key: ValueKey('tool-arguments-${item.id}'),
+                initiallyExpanded: item.status == ToolStatus.awaitingApproval,
+                tilePadding: EdgeInsets.zero,
+                childrenPadding: const EdgeInsets.only(bottom: 8),
+                dense: true,
+                title: Text('Arguments', style: theme.textTheme.bodySmall),
+                subtitle: Text(
+                  argCount == 0
+                      ? 'No arguments'
+                      : '$argCount ${argCount == 1 ? 'field' : 'fields'}',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                children: [JsonBlock(item.args, maxHeight: 180)],
+              ),
+            ),
             if (item.status == ToolStatus.awaitingApproval) ...[
-              const SizedBox(height: 10),
+              const SizedBox(height: 6),
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
@@ -506,24 +542,33 @@ class _ToolCard extends ConsumerWidget {
                 ],
               ),
             ],
-            if (item.output != null) ...[
-              const SizedBox(height: 10),
-              ExpansionTile(
-                tilePadding: EdgeInsets.zero,
-                dense: true,
-                title: const Text('Result'),
-                children: [CodeBlock(_pretty(item.output!), maxHeight: 280)],
+            if (result != null)
+              Theme(
+                data: theme.copyWith(dividerColor: Colors.transparent),
+                child: ExpansionTile(
+                  key: ValueKey('tool-result-${item.id}'),
+                  tilePadding: EdgeInsets.zero,
+                  dense: true,
+                  title: Text('Result', style: theme.textTheme.bodySmall),
+                  subtitle: Text(
+                    '${resultJson == null ? 'Text' : 'JSON'} · ${result.length} characters',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  children: [
+                    CodeBlock(
+                      resultJson == null ? result : prettyJson(resultJson),
+                      maxHeight: 280,
+                      json: resultJson != null,
+                    ),
+                  ],
+                ),
               ),
-            ],
           ],
         ),
       ),
     );
-  }
-
-  String _pretty(String text) {
-    final decoded = tryDecodeJson(text);
-    return decoded == null ? text : prettyJson(decoded);
   }
 }
 
