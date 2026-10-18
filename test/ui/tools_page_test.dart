@@ -75,7 +75,7 @@ Future<ProviderContainer> _open(
   await c
       .read(mcpHubProvider.notifier)
       .addServer(name: 'Files', url: 'https://f.test/mcp');
-  await goTo(tester, '/tools');
+  await goTo(tester, '/mcp-tools');
   return c;
 }
 

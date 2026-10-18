@@ -166,7 +166,7 @@ class _OperatorSectionState extends ConsumerState<OperatorSection> {
                   '${rules.overrides.length} per-tool override${rules.overrides.length == 1 ? '' : 's'}',
                 ),
                 trailing: const Icon(Icons.chevron_right),
-                onTap: () => context.go('/tools'),
+                onTap: () => context.go('/mcp-tools'),
               ),
               const Divider(height: 1),
               ListTile(

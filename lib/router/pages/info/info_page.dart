@@ -55,7 +55,7 @@ class InfoPage extends ConsumerWidget {
                     _Feature(
                       icon: Icons.build_outlined,
                       title: 'Tools & rules',
-                      route: '/tools',
+                      route: '/mcp-tools',
                       body:
                           'Browse every tool, read its schema, and run it by hand. Rules reshape what the Operator sees: '
                           'add arguments such as "reason" or "expected result" to many tools at once (kept in the audit log, '

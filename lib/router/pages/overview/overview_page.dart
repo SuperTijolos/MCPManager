@@ -160,7 +160,7 @@ class _OverviewPageState extends ConsumerState<OverviewPage> {
                         detail: 'From connected servers',
                         icon: Icons.build_outlined,
                         color: StatusColors.info,
-                        onTap: () => context.go('/tools'),
+                        onTap: () => context.go('/mcp-tools'),
                       ),
                     ),
                     tile(
@@ -332,7 +332,7 @@ class _WorkspaceBanner extends StatelessWidget {
       runSpacing: 8,
       children: [
         FilledButton.tonalIcon(
-          onPressed: () => context.go(noServers ? '/mcp-servers' : '/tools'),
+          onPressed: () => context.go(noServers ? '/mcp-servers' : '/mcp-tools'),
           icon: Icon(
             noServers ? Icons.add_rounded : Icons.build_outlined,
             size: 18,
@@ -448,7 +448,7 @@ class _QuickActionsPanel extends StatelessWidget {
             subtitle: hasTools
                 ? 'Run a connected MCP tool'
                 : 'Discover tools from an endpoint',
-            route: hasTools ? '/tools' : '/mcp-servers',
+            route: hasTools ? '/mcp-tools' : '/mcp-servers',
           ),
           const Divider(height: 1),
           const _QuickAction(

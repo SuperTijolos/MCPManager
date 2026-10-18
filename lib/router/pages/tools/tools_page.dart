@@ -48,7 +48,7 @@ class _ToolsPageState extends ConsumerState<ToolsPage> {
     }
 
     return PageScaffold(
-      title: 'Tools',
+      title: 'MCP Tools',
       subtitle: 'Inspect and test tools, and shape what the Operator sees',
       child: DefaultTabController(
         length: 2,

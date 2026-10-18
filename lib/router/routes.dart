@@ -23,7 +23,7 @@ class AppDestination {
 const mainDestinations = [
   AppDestination('/', 'Overview', Icons.dashboard_outlined, Icons.dashboard),
   AppDestination('/mcp-servers', 'MCP Servers', Icons.dns_outlined, Icons.dns),
-  AppDestination('/tools', 'Tools', Icons.build_outlined, Icons.build),
+  AppDestination('/mcp-tools', 'MCP Tools', Icons.build_outlined, Icons.build),
   AppDestination(
     '/chat',
     'Operator',
@@ -71,10 +71,11 @@ GoRouter createRouter() => GoRouter(
         // Preserve existing bookmarks and older incoming links.
         GoRoute(path: '/servers', redirect: (context, state) => '/mcp-servers'),
         GoRoute(
-          path: '/tools',
-          name: 'Tools',
+          path: '/mcp-tools',
+          name: 'MCP Tools',
           pageBuilder: (c, s) => _page(const ToolsPage(), s),
         ),
+        GoRoute(path: '/tools', redirect: (c, s) => '/mcp-tools'),
         GoRoute(
           path: '/chat',
           name: 'Operator',

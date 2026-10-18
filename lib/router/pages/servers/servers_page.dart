@@ -400,7 +400,7 @@ class _ServerCard extends ConsumerWidget {
                   IconButton(
                     tooltip: 'Tools',
                     icon: const Icon(Icons.build_outlined),
-                    onPressed: () => context.go('/tools'),
+                    onPressed: () => context.go('/mcp-tools'),
                   ),
                 IconButton(
                   tooltip: 'Connection details',

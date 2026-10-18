@@ -228,7 +228,7 @@ void main() {
     await pumpApp(tester, server: server);
     await _addDemoServer(tester);
 
-    await tester.tap(find.text('Tools').first);
+    await tester.tap(find.text('MCP Tools').first);
     await tester.pumpAndSettle();
     await tester.tap(find.text('lookup'));
     await tester.pumpAndSettle();
@@ -357,7 +357,7 @@ void main() {
     for (final page in [
       'Overview',
       'MCP Servers',
-      'Tools',
+      'MCP Tools',
       'Operator',
       'Audit',
       'Settings',
