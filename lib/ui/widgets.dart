@@ -190,7 +190,7 @@ class _CodeBlockState extends State<CodeBlock> {
       width: double.infinity,
       constraints: BoxConstraints(maxHeight: widget.maxHeight),
       decoration: BoxDecoration(
-        color: const Color(0xFF0B0F14),
+        color: kCodePanelBackground,
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
           color: Theme.of(context).colorScheme.outlineVariant

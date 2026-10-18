@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 
 const _seed = Color(0xFF4FD1C5);
+
+/// Shared background for read-only code blocks and editable JSON fields.
+const kCodePanelBackground = Color(0xFF0B0F14);
 const monoFonts = ['SF Mono', 'Menlo', 'Consolas', 'Roboto Mono', 'monospace'];
 
 ThemeData buildTheme() {

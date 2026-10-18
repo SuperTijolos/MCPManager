@@ -10,6 +10,7 @@ import 'package:mcp_manager/engine/rules/tool_rules_store.dart';
 import 'package:mcp_manager/router/pages/tools/rule_dialog.dart';
 import 'package:mcp_manager/router/pages/tools/tool_list.dart';
 import 'package:mcp_manager/ui/json_syntax.dart';
+import 'package:mcp_manager/ui/theme.dart';
 import 'package:mcp_manager/ui/widgets.dart';
 
 import '../support/app_harness.dart';
@@ -299,6 +300,12 @@ void main() {
       await _pickTool(tester, 'read_file');
       final editor = tester.widget<TextField>(find.byType(TextField).last);
       expect(editor.controller, isA<JsonEditingController>());
+      expect(editor.decoration?.filled, isTrue);
+      expect(editor.decoration?.fillColor, kCodePanelBackground);
+      expect(
+        (editor.decoration?.enabledBorder as OutlineInputBorder).borderRadius,
+        BorderRadius.circular(8),
+      );
       expect(editor.controller!.text, '{}');
       await tester.enterText(find.byType(TextField).last, '{"path": "/test"}');
       expect(editor.controller!.text, '{"path": "/test"}');
@@ -309,6 +316,18 @@ void main() {
       );
       expect(schemaBlock.json, isTrue);
       expect(schemaBlock.text, contains('inputSchema'));
+      final schemaContainer = tester.widget<Container>(
+        find
+            .descendant(
+              of: find.byType(CodeBlock).first,
+              matching: find.byType(Container),
+            )
+            .first,
+      );
+      expect(
+        (schemaContainer.decoration as BoxDecoration).color,
+        editor.decoration?.fillColor,
+      );
       expect(tester.takeException(), isNull);
     });
 

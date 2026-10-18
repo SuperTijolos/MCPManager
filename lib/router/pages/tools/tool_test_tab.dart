@@ -141,8 +141,30 @@ class _ToolTestTabState extends ConsumerState<ToolTestTab> {
           controller: _args,
           minLines: 4,
           maxLines: 12,
-          style: const TextStyle(fontFamilyFallback: monoFonts, fontSize: 13),
-          decoration: InputDecoration(errorText: _argsError),
+          cursorColor: theme.colorScheme.primary,
+          style: const TextStyle(
+            fontFamilyFallback: monoFonts,
+            fontSize: 12.5,
+            height: 1.4,
+            color: Color(0xFFE6EDF3),
+          ),
+          decoration: InputDecoration(
+            filled: true,
+            fillColor: kCodePanelBackground,
+            contentPadding: const EdgeInsets.all(10),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(
+                color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
+              ),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(color: theme.colorScheme.primary),
+            ),
+            errorText: _argsError,
+          ),
         ),
         const SizedBox(height: 10),
         Row(
