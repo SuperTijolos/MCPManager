@@ -29,9 +29,13 @@ String? openRouterKeyProblem(String? value) {
     return 'This is not an OpenRouter API key. OpenRouter keys start with '
         'sk-or-v1-. Copy one from your OpenRouter Keys page.';
   }
-  if (!RegExp(r'^sk-or-v1-[A-Za-z0-9_-]+$').hasMatch(key)) {
-    return 'Invalid OpenRouter API key format. Paste the raw key, without '
-        'quotes, spaces, or any extra text.';
+  // A standard OpenRouter API key contains exactly 64 lowercase hex digits
+  // after the prefix. A truncated or redacted value can otherwise produce a
+  // misleading "Missing Authentication header" response from OpenRouter.
+  if (!RegExp(r'^sk-or-v1-[0-9a-f]{64}$').hasMatch(key)) {
+    return 'Invalid OpenRouter API key format. A complete key starts with '
+        'sk-or-v1- followed by 64 lowercase hexadecimal characters. '
+        'Copy the full key from OpenRouter (do not paste a masked key).';
   }
   return null;
 }

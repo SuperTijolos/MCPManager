@@ -37,6 +37,10 @@ const _weatherTool = LlmToolSpec(
 String _ndjson(List<Map<String, dynamic>> lines) =>
     '${lines.map(jsonEncode).join('\n')}\n';
 
+// Built in memory so GitHub does not mistake a test fixture for a real key.
+final _openRouterSyntheticKey =
+    'sk-or-v1-${List.filled(4, '0123456789abcdef').join()}';
+
 void main() {
   group('OllamaLlmProvider', () {
     test(
@@ -502,17 +506,26 @@ void main() {
 
     test('normalizes quoted and repeated bearer prefixes', () {
       expect(
-        normalizeApiKey(' "Bearer Bearer sk-or-v1-fakevalue" '),
-        'sk-or-v1-fakevalue',
+        normalizeApiKey(' "Bearer Bearer $_openRouterSyntheticKey" '),
+        _openRouterSyntheticKey,
       );
       expect(
-        normalizeApiKey("'Bearer sk-or-v1-fakevalue'"),
-        'sk-or-v1-fakevalue',
+        normalizeApiKey("'Bearer $_openRouterSyntheticKey'"),
+        _openRouterSyntheticKey,
       );
-      expect(openRouterKeyProblem('Bearer sk-or-v1-fakevalue'), isNull);
+      expect(openRouterKeyProblem('Bearer $_openRouterSyntheticKey'), isNull);
       expect(
         openRouterKeyProblem('Bearer sk-test'),
         contains('OpenRouter keys start with'),
+      );
+      expect(openRouterKeyProblem('sk-or-v1-abcdef'), contains('64 lowercase'));
+      expect(
+        openRouterKeyProblem('sk-or-v1-${List.filled(63, 'a').join()}'),
+        contains('64 lowercase'),
+      );
+      expect(
+        openRouterKeyProblem('sk-or-v1-${List.filled(64, 'A').join()}'),
+        contains('64 lowercase'),
       );
       expect(
         openRouterKeyProblem('sk-or-v1-ab c'),
@@ -552,11 +565,14 @@ void main() {
         final provider = OpenAiLlmProvider(
           _openai.copyWith(
             baseUrl: 'https://openrouter.ai/api/v1',
-            apiKey: 'sk-or-v1-test',
+            apiKey: _openRouterSyntheticKey,
           ),
           httpClient: MockClient((request) async {
             paths.add(request.url.path);
-            expect(request.headers['authorization'], 'Bearer sk-or-v1-test');
+            expect(
+              request.headers['authorization'],
+              'Bearer $_openRouterSyntheticKey',
+            );
             if (request.url.path.endsWith('/key')) {
               return http.Response('{"data": {"label": "test"}}', 200);
             }
@@ -572,7 +588,7 @@ void main() {
       final provider = OpenAiLlmProvider(
         _openai.copyWith(
           baseUrl: 'https://openrouter.ai/api/v1',
-          apiKey: 'sk-or-v1-test',
+          apiKey: _openRouterSyntheticKey,
         ),
         httpClient: MockClient((request) async {
           expect(request.url.path, '/api/v1/key');

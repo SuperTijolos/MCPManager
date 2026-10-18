@@ -67,6 +67,10 @@ Future<void> _tapVisible(WidgetTester tester, Finder f) async {
   await tester.pumpAndSettle();
 }
 
+// Built in memory so GitHub does not mistake a test fixture for a real key.
+final _openRouterSyntheticKey =
+    'sk-or-v1-${List.filled(4, '0123456789abcdef').join()}';
+
 void main() {
   group('navigation', () {
     testWidgets('three sections, Models first', (tester) async {
@@ -163,7 +167,7 @@ void main() {
       expect(find.text('This service needs a key'), findsOneWidget);
       await tester.enterText(
         find.widgetWithText(TextFormField, 'API key'),
-        'sk-or-v1-test',
+        _openRouterSyntheticKey,
       );
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
@@ -171,7 +175,7 @@ void main() {
       final added = c.read(llmSettingsProvider).providers.last;
       expect(added.name, 'OpenRouter');
       expect(added.baseUrl, 'https://openrouter.ai/api/v1');
-      expect(added.apiKey, 'sk-or-v1-test');
+      expect(added.apiKey, _openRouterSyntheticKey);
       expect(find.text('API key set'), findsOneWidget);
     });
 
@@ -193,6 +197,25 @@ void main() {
       expect(c.read(llmSettingsProvider).providers.length, 1);
     });
 
+    testWidgets('OpenRouter provider card flags truncated saved keys', (
+      tester,
+    ) async {
+      final c = await _open(tester);
+      c
+          .read(llmSettingsProvider.notifier)
+          .upsert(
+            const ProviderConfig(
+              id: 'bad-openrouter',
+              name: 'OpenRouter',
+              kind: ProviderKind.openaiCompatible,
+              baseUrl: 'https://openrouter.ai/api/v1',
+              apiKey: 'sk-or-v1-truncated',
+            ),
+          );
+      await tester.pumpAndSettle();
+      expect(find.text('invalid API key format'), findsOneWidget);
+    });
+
     testWidgets('hosted providers still require a key when edited', (
       tester,
     ) async {
@@ -203,12 +226,12 @@ void main() {
       await tester.pumpAndSettle();
       await tester.enterText(
         find.widgetWithText(TextFormField, 'API key'),
-        'Bearer sk-or-v1-test',
+        'Bearer $_openRouterSyntheticKey',
       );
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
       final added = c.read(llmSettingsProvider).providers.last;
-      expect(added.apiKey, 'sk-or-v1-test');
+      expect(added.apiKey, _openRouterSyntheticKey);
 
       await tester.tap(find.byTooltip('Edit').last);
       await tester.pumpAndSettle();
@@ -218,7 +241,7 @@ void main() {
       expect(find.text('This service needs a key'), findsOneWidget);
       expect(
         c.read(llmSettingsProvider).providers.last.apiKey,
-        'sk-or-v1-test',
+        _openRouterSyntheticKey,
       );
     });
 
