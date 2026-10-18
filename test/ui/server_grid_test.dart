@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mcp_manager/engine/mcp/mcp_hub.dart';
 
@@ -49,6 +50,51 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
+
+  testWidgets('server name sits above a selectable code-style endpoint', (
+    tester,
+  ) async {
+    await _withServers(tester, const Size(1280, 900));
+    final firstCard = find.byType(Card).first;
+    expect(
+      find.descendant(of: firstCard, matching: find.byIcon(Icons.dns_outlined)),
+      findsNothing,
+      reason: 'the server identity no longer has a decorative icon',
+    );
+    final endpoint = find.descendant(
+      of: firstCard,
+      matching: find.byType(SelectableText),
+    );
+    expect(endpoint, findsOneWidget);
+    final text = tester.widget<SelectableText>(endpoint);
+    expect(text.data, 'https://mcp.test/mcp');
+    expect(text.style?.fontFamily, 'monospace');
+    expect(find.byTooltip('Copy endpoint'), findsNWidgets(3));
+  });
+
+  testWidgets('the endpoint copy action copies the full URL', (tester) async {
+    String? copied;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copied = (call.arguments as Map)['text'] as String;
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+    await _withServers(tester, const Size(1280, 900));
+    await tester.tap(find.byTooltip('Copy endpoint').first);
+    await tester.pump();
+    expect(copied, 'https://mcp.test/mcp');
+    expect(find.text('Endpoint copied'), findsOneWidget);
+  });
 
   testWidgets('connection details open a dedicated diagnostics dialog', (
     tester,

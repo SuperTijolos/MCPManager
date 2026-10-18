@@ -118,6 +118,64 @@ class _ServersPageState extends ConsumerState<ServersPage> {
   }
 }
 
+/// The full endpoint remains selectable even if it is wider than the card.
+/// A dedicated copy action is easier to discover than tapping a truncated URL.
+class _ServerEndpoint extends StatelessWidget {
+  const _ServerEndpoint({required this.url});
+
+  final String url;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      height: 40,
+      padding: const EdgeInsets.only(left: 12, right: 2),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withValues(
+          alpha: 0.50,
+        ),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: theme.colorScheme.outlineVariant.withValues(alpha: 0.55),
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Tooltip(
+              message: url,
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: SelectableText(
+                  url,
+                  maxLines: 1,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontFamily: 'monospace',
+                    color: theme.colorScheme.onSurface,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Copy endpoint',
+            icon: const Icon(Icons.copy_outlined, size: 18),
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: url));
+              ScaffoldMessenger.of(context)
+                ..hideCurrentSnackBar()
+                ..showSnackBar(
+                  const SnackBar(content: Text('Endpoint copied')),
+                );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ServerSummary extends StatelessWidget {
   const _ServerSummary({required this.servers});
   final List<ServerRuntime> servers;
@@ -224,37 +282,21 @@ class _ServerCard extends ConsumerWidget {
           children: [
             Row(
               children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    color: color.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(10),
+                Expanded(
+                  child: Text(
+                    config.name,
+                    style: theme.textTheme.titleMedium,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  child: Icon(Icons.dns_outlined, color: color, size: 20),
                 ),
-                const Spacer(),
+                const SizedBox(width: 8),
                 StatusChip(label, color, icon: icon),
               ],
             ),
-            const SizedBox(height: 10),
-            Text(
-              config.name,
-              style: theme.textTheme.titleMedium,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            const SizedBox(height: 3),
-            Tooltip(
-              message: config.url,
-              child: Text(
-                config.url,
-                style: muted,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
+            _ServerEndpoint(url: config.url),
+            const SizedBox(height: 12),
             Wrap(
               spacing: 6,
               runSpacing: 4,
