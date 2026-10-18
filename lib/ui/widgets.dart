@@ -158,17 +158,30 @@ class StatusChip extends StatelessWidget {
 }
 
 /// Selectable, scrollable monospace block for JSON, logs and tool output.
-class CodeBlock extends StatelessWidget {
+class CodeBlock extends StatefulWidget {
   const CodeBlock(this.text, {super.key, this.maxHeight = 260});
 
   final String text;
   final double maxHeight;
 
   @override
+  State<CodeBlock> createState() => _CodeBlockState();
+}
+
+class _CodeBlockState extends State<CodeBlock> {
+  final _scrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      constraints: BoxConstraints(maxHeight: maxHeight),
+      constraints: BoxConstraints(maxHeight: widget.maxHeight),
       decoration: BoxDecoration(
         color: const Color(0xFF0B0F14),
         borderRadius: BorderRadius.circular(8),
@@ -180,14 +193,21 @@ class CodeBlock extends StatelessWidget {
       child: Stack(
         children: [
           Scrollbar(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(10),
-              child: SelectableText(
-                text.isEmpty ? '(empty)' : text,
-                style: const TextStyle(
-                  fontFamilyFallback: monoFonts,
-                  fontSize: 12.5,
-                  height: 1.4,
+            controller: _scrollController,
+            // Do not add a second implicit desktop scrollbar for the same view.
+            child: ScrollConfiguration(
+              behavior: ScrollConfiguration.of(context)
+                  .copyWith(scrollbars: false),
+              child: SingleChildScrollView(
+                controller: _scrollController,
+                padding: const EdgeInsets.all(10),
+                child: SelectableText(
+                  widget.text.isEmpty ? '(empty)' : widget.text,
+                  style: const TextStyle(
+                    fontFamilyFallback: monoFonts,
+                    fontSize: 12.5,
+                    height: 1.4,
+                  ),
                 ),
               ),
             ),
@@ -201,7 +221,7 @@ class CodeBlock extends StatelessWidget {
               visualDensity: VisualDensity.compact,
               icon: const Icon(Icons.copy_rounded),
               onPressed: () {
-                Clipboard.setData(ClipboardData(text: text));
+                Clipboard.setData(ClipboardData(text: widget.text));
                 ScaffoldMessenger.of(context)
                   ..hideCurrentSnackBar()
                   ..showSnackBar(
