@@ -133,6 +133,83 @@ void main() {
     expect(find.text('4 of 4 tools'), findsOneWidget);
   });
 
+  testWidgets('server dropdown searches and filters the MCP tool list', (
+    tester,
+  ) async {
+    final c = await _open(tester);
+    final second = await c
+        .read(mcpHubProvider.notifier)
+        .addServer(name: 'Warehouse MCP', url: 'https://warehouse.test/mcp');
+    await tester.pumpAndSettle();
+
+    final picker = find.byType(DropdownMenu<String>);
+    expect(picker, findsOneWidget);
+    expect(find.byType(ChoiceChip), findsNothing);
+    expect(find.text('8 of 8 tools'), findsOneWidget);
+
+    await tester.tap(picker);
+    await tester.pumpAndSettle();
+    final field = find.descendant(of: picker, matching: find.byType(TextField));
+    await tester.enterText(field, 'Warehouse');
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(MenuItemButton, 'Warehouse MCP').last);
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<ToolList>(find.byType(ToolList)).serverId,
+      second.config.id,
+    );
+    expect(find.text('4 of 8 tools'), findsOneWidget);
+    expect(find.widgetWithText(ListTile, 'read_file'), findsOneWidget);
+
+    await tester.tap(find.byType(DropdownMenu<String>));
+    await tester.pumpAndSettle();
+    await tester.enterText(field, 'All MCP servers');
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.widgetWithText(MenuItemButton, 'All MCP servers').last,
+    );
+    await tester.pumpAndSettle();
+    expect(tester.widget<ToolList>(find.byType(ToolList)).serverId, isNull);
+    expect(find.text('8 of 8 tools'), findsOneWidget);
+  });
+
+  testWidgets('searchable MCP server menu fits a phone screen', (tester) async {
+    final c = await _open(tester, size: const Size(390, 820));
+    final second = await c
+        .read(mcpHubProvider.notifier)
+        .addServer(
+          name: 'Warehouse MCP with a much longer name',
+          url: 'https://warehouse.test/mcp',
+        );
+    await tester.pumpAndSettle();
+
+    final picker = find.byType(DropdownMenu<String>);
+    expect(picker, findsOneWidget);
+    expect(tester.getSize(picker).width, lessThanOrEqualTo(390));
+    await tester.tap(picker);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    await tester.enterText(
+      find.descendant(of: picker, matching: find.byType(TextField)),
+      'Warehouse',
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find
+          .widgetWithText(
+            MenuItemButton,
+            'Warehouse MCP with a much longer name',
+          )
+          .last,
+    );
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<ToolList>(find.byType(ToolList)).serverId,
+      second.config.id,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('hidden filter follows Operator visibility overrides', (
     tester,
   ) async {

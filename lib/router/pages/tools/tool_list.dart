@@ -108,24 +108,34 @@ class ToolList extends ConsumerWidget {
         ),
         if (servers.length > 1) ...[
           const SizedBox(height: 8),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                ChoiceChip(
-                  label: const Text('All'),
-                  selected: serverId == null,
-                  onSelected: (_) => onServer(null),
+          LayoutBuilder(
+            builder: (context, constraints) => DropdownMenu<String>(
+              key: ValueKey('mcp-server-picker-${serverId ?? 'all'}'),
+              width: constraints.maxWidth,
+              menuHeight: 280,
+              requestFocusOnTap: true,
+              enableFilter: true,
+              enableSearch: true,
+              initialSelection: serverId ?? '',
+              leadingIcon: const Icon(Icons.dns_outlined, size: 20),
+              label: const Text('MCP server'),
+              trailingIcon: const Icon(Icons.keyboard_arrow_down),
+              selectedTrailingIcon: const Icon(Icons.keyboard_arrow_up),
+              dropdownMenuEntries: [
+                const DropdownMenuEntry<String>(
+                  value: '',
+                  label: 'All MCP servers',
+                  leadingIcon: Icon(Icons.all_inclusive),
                 ),
-                for (final s in servers) ...[
-                  const SizedBox(width: 6),
-                  ChoiceChip(
-                    label: Text(s.config.name),
-                    selected: serverId == s.config.id,
-                    onSelected: (_) => onServer(s.config.id),
+                for (final server in servers)
+                  DropdownMenuEntry<String>(
+                    value: server.config.id,
+                    label: server.config.name,
+                    leadingIcon: const Icon(Icons.dns_outlined),
                   ),
-                ],
               ],
+              onSelected: (id) =>
+                  onServer(id == null || id.isEmpty ? null : id),
             ),
           ),
         ],
