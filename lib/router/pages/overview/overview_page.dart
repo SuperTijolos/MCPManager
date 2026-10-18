@@ -150,7 +150,7 @@ class _OverviewPageState extends ConsumerState<OverviewPage> {
                             : unavailable == 0
                             ? StatusColors.ok
                             : StatusColors.warn,
-                        onTap: () => context.go('/servers'),
+                        onTap: () => context.go('/mcp-servers'),
                       ),
                     ),
                     tile(
@@ -332,7 +332,7 @@ class _WorkspaceBanner extends StatelessWidget {
       runSpacing: 8,
       children: [
         FilledButton.tonalIcon(
-          onPressed: () => context.go(noServers ? '/servers' : '/tools'),
+          onPressed: () => context.go(noServers ? '/mcp-servers' : '/tools'),
           icon: Icon(
             noServers ? Icons.add_rounded : Icons.build_outlined,
             size: 18,
@@ -448,7 +448,7 @@ class _QuickActionsPanel extends StatelessWidget {
             subtitle: hasTools
                 ? 'Run a connected MCP tool'
                 : 'Discover tools from an endpoint',
-            route: hasTools ? '/tools' : '/servers',
+            route: hasTools ? '/tools' : '/mcp-servers',
           ),
           const Divider(height: 1),
           const _QuickAction(
@@ -553,7 +553,7 @@ class _AttentionCard extends StatelessWidget {
                 ),
               ),
               TextButton(
-                onPressed: () => context.go('/servers'),
+                onPressed: () => context.go('/mcp-servers'),
                 child: const Text('Manage'),
               ),
             ],
@@ -854,7 +854,7 @@ class _ServerHealthPanel extends StatelessWidget {
                   ),
                 ),
                 TextButton(
-                  onPressed: () => context.go('/servers'),
+                  onPressed: () => context.go('/mcp-servers'),
                   child: const Text('View all'),
                 ),
               ],

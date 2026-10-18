@@ -42,7 +42,7 @@ Future<ProviderContainer> _open(
     httpClient: httpClient,
     size: size,
   );
-  await goTo(tester, '/servers');
+  await goTo(tester, '/mcp-servers');
   return c;
 }
 

@@ -31,7 +31,7 @@ final _tools = [
 ];
 
 Future<void> _addDemoServer(WidgetTester tester) async {
-  await tester.tap(find.text('Servers').first);
+  await tester.tap(find.text('MCP Servers').first);
   await tester.pumpAndSettle();
   await tester.tap(find.text('Add your first server'));
   await tester.pumpAndSettle();
@@ -183,7 +183,7 @@ void main() {
   ) async {
     await pumpApp(tester, server: FakeMcpServer(tools: _tools));
 
-    await tester.tap(find.text('Servers').first);
+    await tester.tap(find.text('MCP Servers').first);
     await tester.pumpAndSettle();
     expect(find.text('No servers yet'), findsOneWidget);
 
@@ -353,7 +353,7 @@ void main() {
 
     for (final page in [
       'Overview',
-      'Servers',
+      'MCP Servers',
       'Tools',
       'Operator',
       'Audit',
@@ -375,7 +375,7 @@ void main() {
     'OAuth mode shows the redirect URI to allow and the ChatGPT caveat',
     (tester) async {
       await pumpApp(tester);
-      await tester.tap(find.text('Servers').first);
+      await tester.tap(find.text('MCP Servers').first);
       await tester.pumpAndSettle();
       await tester.tap(find.text('Add your first server'));
       await tester.pumpAndSettle();
@@ -416,7 +416,7 @@ void main() {
     final world = FakeOAuthWorld(mcp: FakeMcpServer(tools: _tools));
     await pumpApp(tester, oauth: world);
 
-    await tester.tap(find.text('Servers').first);
+    await tester.tap(find.text('MCP Servers').first);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Add your first server'));
     await tester.pumpAndSettle();

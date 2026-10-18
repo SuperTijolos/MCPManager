@@ -42,8 +42,8 @@ class InfoPage extends ConsumerWidget {
                   tile(
                     _Feature(
                       icon: Icons.dns_outlined,
-                      title: 'Servers',
-                      route: '/servers',
+                      title: 'MCP Servers',
+                      route: '/mcp-servers',
                       body:
                           'Connect MCP servers over Streamable HTTP or the older HTTP+SSE transport; the app detects which '
                           'one a server speaks, including a bare host:port. Authenticate with a bearer token or OAuth, '

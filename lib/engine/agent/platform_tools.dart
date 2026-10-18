@@ -742,7 +742,7 @@ Json serverSummary(ServerRuntime r, {bool includeTools = false}) => {
   if (r.error != null) 'error': r.error,
   if (r.status == ServerStatus.needsAuth)
     'nextStep':
-        'The user must click "Sign in" for this server (Servers page, or the '
+        'The user must click "Sign in" for this server (MCP Servers page, or the '
         'banner in this chat). You cannot sign in for them.',
   if (includeTools) 'toolNames': [for (final t in r.tools) t.name],
 };

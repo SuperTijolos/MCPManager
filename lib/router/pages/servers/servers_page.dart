@@ -32,7 +32,7 @@ class _ServersPageState extends ConsumerState<ServersPage> {
     ];
 
     return PageScaffold(
-      title: 'Servers',
+      title: 'MCP Servers',
       subtitle: 'Connect and manage your MCP servers',
       actions: [
         IconButton(

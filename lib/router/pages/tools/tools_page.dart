@@ -91,8 +91,8 @@ class _ToolsPageState extends ConsumerState<ToolsPage> {
         title: 'No tools available',
         message: 'Connect an MCP server to discover its tools.',
         action: FilledButton(
-          onPressed: () => context.go('/servers'),
-          child: const Text('Open Servers'),
+          onPressed: () => context.go('/mcp-servers'),
+          child: const Text('Open MCP Servers'),
         ),
       );
     }

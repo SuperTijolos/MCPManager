@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:mcp_manager/engine/mcp/mcp_hub.dart';
 
 import '../support/app_harness.dart';
@@ -25,10 +26,20 @@ Future<void> _withServers(WidgetTester tester, Size size) async {
         .read(mcpHubProvider.notifier)
         .addServer(name: name, url: 'https://mcp.test/mcp');
   }
-  await goTo(tester, '/servers');
+  await goTo(tester, '/mcp-servers');
 }
 
 void main() {
+  testWidgets('legacy /servers links redirect to MCP Servers', (tester) async {
+    await _withServers(tester, const Size(1280, 900));
+    await goTo(tester, '/servers');
+    final router = GoRouter.of(tester.element(find.byType(Scaffold).first));
+    expect(router.routeInformationProvider.value.uri.path, '/mcp-servers');
+    expect(find.text('MCP Servers'), findsWidgets);
+    expect(find.text('Connect and manage your MCP servers'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   for (final (size, columns) in [
     (const Size(1724, 1000), 3),
     (const Size(1100, 900), 2),

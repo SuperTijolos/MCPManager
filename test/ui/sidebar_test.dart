@@ -119,7 +119,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(Drawer), findsOneWidget);
     await tester.tap(
-      find.descendant(of: find.byType(Drawer), matching: find.text('Servers')),
+      find.descendant(
+        of: find.byType(Drawer),
+        matching: find.text('MCP Servers'),
+      ),
     );
     await tester.pumpAndSettle();
 

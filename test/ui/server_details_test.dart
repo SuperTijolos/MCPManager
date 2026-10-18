@@ -13,7 +13,7 @@ void main() {
       await c
           .read(mcpHubProvider.notifier)
           .addServer(name: 'Cloudflare', url: 'https://cf.test/mcp');
-      await goTo(tester, '/servers');
+      await goTo(tester, '/mcp-servers');
 
       expect(find.textContaining('No MCP transport worked'), findsOneWidget);
       expect(
@@ -43,7 +43,7 @@ void main() {
     await c
         .read(mcpHubProvider.notifier)
         .addServer(name: 'Modern', url: 'https://mcp.test/mcp');
-    await goTo(tester, '/servers');
+    await goTo(tester, '/mcp-servers');
     expect(find.text('Connected'), findsOneWidget);
     expect(find.byTooltip('Connection details'), findsOneWidget);
     expect(

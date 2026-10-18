@@ -77,7 +77,7 @@ void main() {
       await pumpApp(tester);
       await goTo(tester, '/info');
       for (final feature in [
-        'Servers',
+        'MCP Servers',
         'Tools & rules',
         'Operator',
         'Audit',
