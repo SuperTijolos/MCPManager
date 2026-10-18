@@ -109,7 +109,7 @@ void main() {
     expect(find.text('Explore your MCP tools'), findsOneWidget);
     expect(find.text('4 discovered'), findsOneWidget);
     expect(find.text('2 read-only'), findsOneWidget);
-    expect(find.text('2 may modify'), findsOneWidget);
+    expect(find.text('2 not marked read-only'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('open-first-tool')));
     await tester.pumpAndSettle();
     expect(find.text('Explore your MCP tools'), findsNothing);
@@ -126,7 +126,7 @@ void main() {
     expect(find.widgetWithText(ListTile, 'list_dir'), findsOneWidget);
     expect(find.widgetWithText(ListTile, 'write_file'), findsNothing);
     expect(find.text('2 of 4 tools'), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('tool-filter-mayModify')));
+    await tester.tap(find.byKey(const ValueKey('tool-filter-notReadOnly')));
     await tester.pumpAndSettle();
     expect(find.widgetWithText(ListTile, 'write_file'), findsOneWidget);
     expect(find.widgetWithText(ListTile, 'delete_file'), findsOneWidget);
@@ -574,6 +574,15 @@ void main() {
 
         await tester.enterText(find.widgetWithText(TextField, 'Value'), 'dev');
         await tester.tap(find.text('Create rule'));
+        await tester.pumpAndSettle();
+        // It still applies to every tool, which has to be confirmed.
+        expect(find.text('Apply to all 4 tools?'), findsOneWidget);
+        await tester.tap(find.text('Go back'));
+        await tester.pumpAndSettle();
+        expect(_rules(c), isEmpty, reason: 'going back saves nothing');
+        await tester.tap(find.text('Create rule'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Apply to all 4'));
         await tester.pumpAndSettle();
         final arg = _rules(c).single.args.single;
         expect(arg.source, ArgSource.hardcoded);

@@ -249,19 +249,50 @@ class _RuleDialogState extends ConsumerState<RuleDialog> {
     return null;
   }
 
-  void _save() {
+  Future<void> _save() async {
     final rule = _build();
     final problem = _validate(rule);
     if (problem != null) {
       setState(() => _error = problem);
       return;
     }
+    final total = ref.read(mcpHubProvider).availableTools.length;
+    final matched = _matched(rule).length;
+    final existing = widget.existing;
+    final wasEverything =
+        existing != null &&
+        existing.enabled &&
+        _matched(existing).length == total;
+    // A rule that quietly touches every tool is usually an unfinished scope.
+    if (rule.enabled && total > 1 && matched == total && !wasEverything) {
+      final go = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('Apply to all $total tools?'),
+          content: Text(
+            'This rule matches every connected tool, including ones it has '
+            'nothing to do with. Narrow it to a server, a name pattern or '
+            'selected tools, or keep it if everything should change.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Go back'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text('Apply to all $total'),
+            ),
+          ],
+        ),
+      );
+      if (go != true || !mounted) return;
+    }
     ref.read(toolRulesProvider.notifier).upsert(rule);
-    final n = _matched(rule).length;
     Navigator.pop(context);
     showSnack(
       context,
-      'Rule saved · applies to $n tool${n == 1 ? '' : 's'} right now',
+      'Rule saved · applies to $matched tool${matched == 1 ? '' : 's'} right now',
     );
   }
 

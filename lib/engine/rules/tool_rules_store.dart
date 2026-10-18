@@ -16,6 +16,19 @@ class ToolRulesState {
   /// Keyed by `serverId/toolName`.
   final Map<String, ToolOverride> overrides;
 
+  /// Declared by the server, or vouched for by the user.
+  bool isReadOnly(McpServerConfig server, McpTool tool) =>
+      safety(server, tool).index <= ToolSafety.readOnlyByUser.index;
+
+  ToolSafety safety(McpServerConfig server, McpTool tool) {
+    if (tool.isReadOnly) return ToolSafety.readOnly;
+    if (tool.declaresWrite) return ToolSafety.mayModify;
+    if (overrides[toolKey(server.id, tool.name)]?.readOnly == true) {
+      return ToolSafety.readOnlyByUser;
+    }
+    return ToolSafety.unmarked;
+  }
+
   EffectiveTool effective(McpServerConfig server, McpTool tool) =>
       computeEffective(
         server,
@@ -124,6 +137,22 @@ class ToolRulesNotifier extends Notifier<ToolRulesState> {
     for (final k in keys) {
       final current = next[k] ?? const ToolOverride();
       final updated = current.copyWith(hidden: hidden);
+      if (updated.isEmpty) {
+        next.remove(k);
+      } else {
+        next[k] = updated;
+      }
+    }
+    _set(ToolRulesState(rules: state.rules, overrides: next));
+  }
+
+  /// Marks several tools as read-only (or removes the mark) in one go.
+  void setReadOnly(Iterable<String> keys, bool readOnly) {
+    final next = {...state.overrides};
+    for (final k in keys) {
+      final updated = (next[k] ?? const ToolOverride()).copyWith(
+        readOnly: readOnly,
+      );
       if (updated.isEmpty) {
         next.remove(k);
       } else {

@@ -9,8 +9,9 @@ import '../../../ui/widgets.dart';
 import 'rule_dialog.dart';
 
 /// Tool safety filters are intentionally conservative: an MCP tool without
-/// an explicit read-only annotation is classified as potentially modifying.
-enum ToolListFilter { all, readOnly, mayModify, hidden }
+/// an explicit read-only annotation (and no mark from the user) is treated as
+/// needing approval.
+enum ToolListFilter { all, readOnly, notReadOnly, hidden }
 
 /// Search, server and safety filters, plus (in select mode) bulk actions.
 class ToolList extends ConsumerWidget {
@@ -129,7 +130,7 @@ class ToolList extends ConsumerWidget {
                 label: Text(switch (value) {
                   ToolListFilter.all => 'All',
                   ToolListFilter.readOnly => 'Read-only',
-                  ToolListFilter.mayModify => 'May modify',
+                  ToolListFilter.notReadOnly => 'Not read-only',
                   ToolListFilter.hidden => 'Hidden',
                 }),
                 visualDensity: VisualDensity.compact,
@@ -278,19 +279,38 @@ class ToolList extends ConsumerWidget {
                                 ),
                               Padding(
                                 padding: const EdgeInsets.only(left: 6),
-                                child: Tooltip(
-                                  message: t.tool.isReadOnly
-                                      ? 'Read-only'
-                                      : 'May modify data',
-                                  child: Icon(
-                                    t.tool.isReadOnly
-                                        ? Icons.visibility_outlined
-                                        : Icons.edit_note_outlined,
-                                    size: 16,
-                                    color: t.tool.isReadOnly
-                                        ? StatusColors.ok
-                                        : StatusColors.warn,
-                                  ),
+                                child: Builder(
+                                  builder: (context) {
+                                    final safety = rules.safety(
+                                      t.server,
+                                      t.tool,
+                                    );
+                                    final ok =
+                                        safety == ToolSafety.readOnly ||
+                                        safety == ToolSafety.readOnlyByUser;
+                                    return Tooltip(
+                                      message: switch (safety) {
+                                        ToolSafety.readOnly => 'Read-only',
+                                        ToolSafety.readOnlyByUser =>
+                                          'Read-only (marked by you)',
+                                        ToolSafety.mayModify =>
+                                          'The server says it may modify data',
+                                        ToolSafety.unmarked =>
+                                          'Not marked read-only by the server',
+                                      },
+                                      child: Icon(
+                                        ok
+                                            ? Icons.visibility_outlined
+                                            : safety == ToolSafety.mayModify
+                                            ? Icons.edit_note_outlined
+                                            : Icons.help_outline,
+                                        size: 16,
+                                        color: ok
+                                            ? StatusColors.ok
+                                            : StatusColors.warn,
+                                      ),
+                                    );
+                                  },
                                 ),
                               ),
                             ],
@@ -330,6 +350,15 @@ class _BulkBar extends ConsumerWidget {
     final store = ref.read(toolRulesProvider.notifier);
     final overrides = ref.watch(toolRulesProvider).overrides;
     final anyVisible = selected.any((k) => overrides[k]?.hidden != true);
+    // Only tools the server is silent about can be vouched for.
+    final markable = [
+      for (final t in allTools)
+        if (selected.contains(ToolList.keyOf(t)) &&
+            !t.tool.isReadOnly &&
+            !t.tool.declaresWrite)
+          ToolList.keyOf(t),
+    ];
+    final anyUnmarked = markable.any((k) => overrides[k]?.readOnly != true);
     final count = selected.length;
 
     return Container(
@@ -385,6 +414,22 @@ class _BulkBar extends ConsumerWidget {
                 ),
                 label: Text(
                   anyVisible ? 'Hide from Operator' : 'Show to Operator',
+                ),
+              ),
+              Tooltip(
+                message:
+                    'Tools the server does not mark read-only normally need '
+                    'your approval. Marking them skips that for the Operator.',
+                child: OutlinedButton.icon(
+                  onPressed: markable.isEmpty
+                      ? null
+                      : () => store.setReadOnly(markable, anyUnmarked),
+                  icon: const Icon(Icons.visibility_outlined, size: 18),
+                  label: Text(
+                    anyUnmarked
+                        ? 'Treat as read-only'
+                        : 'Remove read-only mark',
+                  ),
                 ),
               ),
             ],

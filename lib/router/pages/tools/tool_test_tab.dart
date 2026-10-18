@@ -35,6 +35,9 @@ class _ToolTestTabState extends ConsumerState<ToolTestTab> {
   String? _argsError;
   bool _running = false;
 
+  /// Confirmed once for this tool in this panel; switching tools asks again.
+  bool _confirmedWrite = false;
+
   McpTool get _tool => widget.toolRef.tool;
 
   EffectiveTool get _effective =>
@@ -78,6 +81,14 @@ class _ToolTestTabState extends ConsumerState<ToolTestTab> {
       return;
     }
 
+    final rules = ref.read(toolRulesProvider);
+    final safety = rules.safety(widget.toolRef.server, _tool);
+    if (!_confirmedWrite && !rules.isReadOnly(widget.toolRef.server, _tool)) {
+      final go = await _confirmRun(safety, prepared?.forwarded ?? parsed);
+      if (go != true || !mounted) return;
+      _confirmedWrite = true;
+    }
+
     setState(() {
       _argsError = null;
       _running = true;
@@ -104,6 +115,44 @@ class _ToolTestTabState extends ConsumerState<ToolTestTab> {
       _durationMs = watch.elapsedMilliseconds;
     });
   }
+
+  /// Nothing stops a click from running `delete_file` with the template's
+  /// placeholder values, so ask first unless the tool is known to only read.
+  Future<bool?> _confirmRun(ToolSafety safety, Json args) => showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text('Run ${_tool.displayName}?'),
+      content: SizedBox(
+        width: 480,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              safety == ToolSafety.mayModify
+                  ? 'The server says this tool may modify data.'
+                  : 'The server does not say whether this tool changes '
+                        'anything, so it might.',
+            ),
+            const SizedBox(height: 10),
+            Text('It will be called on ${widget.toolRef.server.name} with:'),
+            const SizedBox(height: 6),
+            JsonBlock(args, maxHeight: 160),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('Run'),
+        ),
+      ],
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {

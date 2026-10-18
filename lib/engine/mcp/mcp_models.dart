@@ -161,6 +161,12 @@ class McpTool {
   /// are treated as needing a human decision.
   bool get isReadOnly => annotations['readOnlyHint'] == true;
 
+  /// The server itself says the tool changes things. Unlike a missing hint,
+  /// this is a statement, so a user's "treat as read-only" never overrides it.
+  bool get declaresWrite =>
+      annotations['readOnlyHint'] == false ||
+      annotations['destructiveHint'] == true;
+
   bool get isDestructive =>
       !isReadOnly && annotations['destructiveHint'] != false;
 }

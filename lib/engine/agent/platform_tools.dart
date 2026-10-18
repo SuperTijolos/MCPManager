@@ -11,6 +11,7 @@ import '../llm/provider_config.dart';
 import '../mcp/mcp_hub.dart';
 import '../mcp/mcp_models.dart';
 import '../mcp/oauth/oauth_service.dart';
+import '../rules/tool_rules_store.dart';
 import 'agent_tool.dart';
 
 /// A problem with the model's arguments. The message goes back to the model so
@@ -194,7 +195,9 @@ List<AgentTool> platformTools(Ref ref) {
               'server': t.server.name,
               'tool': t.tool.name,
               'description': t.tool.description,
-              'readOnly': t.tool.isReadOnly,
+              'readOnly': ref
+                  .read(toolRulesProvider)
+                  .isReadOnly(t.server, t.tool),
             },
       ];
     },
@@ -220,7 +223,9 @@ List<AgentTool> platformTools(Ref ref) {
             'tool': tool.name,
             'title': tool.title,
             'description': tool.description,
-            'readOnly': tool.isReadOnly,
+            'readOnly': ref
+                .read(toolRulesProvider)
+                .isReadOnly(server.config, tool),
             'inputSchema': tool.inputSchema,
             'annotations': tool.annotations,
           };

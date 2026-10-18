@@ -45,8 +45,8 @@ class _ToolsPageState extends ConsumerState<ToolsPage> {
                 t.tool.displayName.toLowerCase().contains(_query)) &&
             switch (_filter) {
               ToolListFilter.all => true,
-              ToolListFilter.readOnly => t.tool.isReadOnly,
-              ToolListFilter.mayModify => !t.tool.isReadOnly,
+              ToolListFilter.readOnly => rules.isReadOnly(t.server, t.tool),
+              ToolListFilter.notReadOnly => !rules.isReadOnly(t.server, t.tool),
               ToolListFilter.hidden =>
                 rules.overrides[ToolList.keyOf(t)]?.hidden == true,
             })
@@ -65,7 +65,13 @@ class _ToolsPageState extends ConsumerState<ToolsPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _ToolSummary(tools: all, servers: hub.connectedCount),
+            _ToolSummary(
+              tools: all,
+              readOnly: all
+                  .where((t) => rules.isReadOnly(t.server, t.tool))
+                  .length,
+              servers: hub.connectedCount,
+            ),
             const SizedBox(height: 12),
             TabBar(
               isScrollable: true,
@@ -190,14 +196,20 @@ class _ToolsPageState extends ConsumerState<ToolsPage> {
 /// Small overview to replace the otherwise unused detail pane before a tool
 /// is selected. Counts are derived from live MCP annotations, never guessed.
 class _ToolSummary extends StatelessWidget {
-  const _ToolSummary({required this.tools, required this.servers});
+  const _ToolSummary({
+    required this.tools,
+    required this.readOnly,
+    required this.servers,
+  });
   final List<ToolRef> tools;
+
+  /// Declared by the server or vouched for by the user.
+  final int readOnly;
   final int servers;
 
   @override
   Widget build(BuildContext context) {
     final color = Theme.of(context).colorScheme.onSurfaceVariant;
-    final readOnly = tools.where((t) => t.tool.isReadOnly).length;
     return Wrap(
       key: const ValueKey('mcp-tool-summary'),
       spacing: 22,
@@ -212,7 +224,7 @@ class _ToolSummary extends StatelessWidget {
         ),
         _SummaryItem(
           Icons.edit_note_outlined,
-          '${tools.length - readOnly} may modify',
+          '${tools.length - readOnly} not marked read-only',
           StatusColors.warn,
         ),
       ],

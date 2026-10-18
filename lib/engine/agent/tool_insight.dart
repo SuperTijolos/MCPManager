@@ -240,6 +240,7 @@ class ToolInsight {
     required this.tool,
     required this.capabilities,
     required this.pathArgs,
+    required this.readOnly,
     required this._words,
   });
 
@@ -252,7 +253,8 @@ class ToolInsight {
   final List<String> pathArgs;
   final Set<String> _words;
 
-  bool get readOnly => tool.isReadOnly;
+  /// Declared by the server or vouched for by the user (see ToolOverride).
+  final bool readOnly;
   List<String> get requiredArgs => [
     for (final r in (tool.inputSchema['required'] as List?) ?? const []) '$r',
   ];
@@ -271,7 +273,12 @@ class ToolInsight {
     required String exposedName,
     required String serverName,
     required McpTool tool,
+
+    /// Defaults to what the server declares; callers pass the effective
+    /// value when the user has vouched for the tool.
+    bool? readOnly,
   }) {
+    final isReadOnly = readOnly ?? tool.isReadOnly;
     final nameTokens = tokens(tool.name).toSet();
     final titleTokens = tokens(tool.title ?? '').toSet();
     final descriptionTokens = tokens(
@@ -305,7 +312,7 @@ class ToolInsight {
       caps.add(Capability.execute);
     }
     // Read-only tools that take nothing are typically "tell me about X".
-    if (tool.isReadOnly &&
+    if (isReadOnly &&
         ((tool.inputSchema['required'] as List?) ?? const []).isEmpty &&
         props.length <= 1 &&
         caps.isEmpty) {
@@ -319,7 +326,7 @@ class ToolInsight {
       }
     }
     if (caps.isEmpty) {
-      caps.add(tool.isReadOnly ? Capability.read : Capability.write);
+      caps.add(isReadOnly ? Capability.read : Capability.write);
     }
 
     final pathArgs = <String>[
@@ -333,6 +340,7 @@ class ToolInsight {
       tool: tool,
       capabilities: caps,
       pathArgs: pathArgs,
+      readOnly: isReadOnly,
       words: {
         ...nameTokens,
         ...titleTokens,

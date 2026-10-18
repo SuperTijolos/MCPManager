@@ -289,24 +289,40 @@ class ToolRule {
 
 /// Per-tool exceptions that win over rules.
 class ToolOverride {
-  const ToolOverride({this.hidden = false, this.instructions = ''});
+  const ToolOverride({
+    this.hidden = false,
+    this.instructions = '',
+    this.readOnly = false,
+  });
 
   /// Hidden tools are not offered to the Operator at all.
   final bool hidden;
   final String instructions;
 
-  bool get isEmpty => !hidden && instructions.trim().isEmpty;
+  /// The user vouches that this tool only reads, though its server does not
+  /// say so. The Operator then skips the approval step for it. Never sent to
+  /// the server, and ignored for a tool whose server says it writes.
+  final bool readOnly;
 
-  ToolOverride copyWith({bool? hidden, String? instructions}) => ToolOverride(
-    hidden: hidden ?? this.hidden,
-    instructions: instructions ?? this.instructions,
-  );
+  bool get isEmpty => !hidden && !readOnly && instructions.trim().isEmpty;
 
-  Json toJson() => {'hidden': hidden, 'instructions': instructions};
+  ToolOverride copyWith({bool? hidden, String? instructions, bool? readOnly}) =>
+      ToolOverride(
+        hidden: hidden ?? this.hidden,
+        instructions: instructions ?? this.instructions,
+        readOnly: readOnly ?? this.readOnly,
+      );
+
+  Json toJson() => {
+    'hidden': hidden,
+    'instructions': instructions,
+    if (readOnly) 'readOnly': true,
+  };
 
   factory ToolOverride.fromJson(Json json) => ToolOverride(
     hidden: json['hidden'] as bool? ?? false,
     instructions: json['instructions'] as String? ?? '',
+    readOnly: json['readOnly'] as bool? ?? false,
   );
 }
 
@@ -388,6 +404,21 @@ const rulePresets = [
   ),
 ];
 
+/// How much the app knows about whether a tool changes anything.
+enum ToolSafety {
+  /// The server declares it read-only.
+  readOnly,
+
+  /// The user vouched for it; the server says nothing either way.
+  readOnlyByUser,
+
+  /// The server declares that it modifies things.
+  mayModify,
+
+  /// The server did not say; treated as needing approval.
+  unmarked,
+}
+
 /// A tool as the Operator sees it, after rules and overrides.
 class EffectiveTool {
   const EffectiveTool({
@@ -401,6 +432,7 @@ class EffectiveTool {
     required this.rules,
     required this.warnings,
     required this.instructions,
+    required this.readOnly,
   });
 
   final McpServerConfig server;
@@ -419,6 +451,12 @@ class EffectiveTool {
   final List<String> rules;
   final List<String> warnings;
   final String instructions;
+
+  /// The server declares the tool read-only, or the user vouched for it.
+  final bool readOnly;
+
+  /// Read-only only because the user said so.
+  bool get readOnlyByUser => readOnly && !tool.isReadOnly;
 
   bool get isModified =>
       !visible ||
@@ -509,6 +547,8 @@ EffectiveTool computeEffective(
     rules: [for (final r in applicable) r.name],
     warnings: warnings,
     instructions: notes.join('\n'),
+    readOnly:
+        tool.isReadOnly || (override?.readOnly == true && !tool.declaresWrite),
   );
 }
 

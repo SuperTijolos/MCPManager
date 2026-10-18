@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../engine/mcp/mcp_hub.dart';
+import '../../../engine/rules/tool_rules.dart';
 import '../../../engine/rules/tool_rules_store.dart';
 import '../../../ui/theme.dart';
 import '../../../ui/widgets.dart';
@@ -19,9 +20,9 @@ class ToolDetail extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final tool = toolRef.tool;
-    final effective = ref
-        .watch(toolRulesProvider)
-        .effective(toolRef.server, tool);
+    final rules = ref.watch(toolRulesProvider);
+    final effective = rules.effective(toolRef.server, tool);
+    final safety = rules.safety(toolRef.server, tool);
 
     return DefaultTabController(
       length: 3,
@@ -39,18 +40,28 @@ class ToolDetail extends ConsumerWidget {
               Wrap(
                 spacing: 6,
                 children: [
-                  if (tool.isReadOnly)
-                    const StatusChip(
+                  switch (safety) {
+                    ToolSafety.readOnly => const StatusChip(
                       'read-only',
                       StatusColors.ok,
                       icon: Icons.visibility_outlined,
-                    )
-                  else if (tool.isDestructive)
-                    const StatusChip(
+                    ),
+                    ToolSafety.readOnlyByUser => const StatusChip(
+                      'read-only (marked by you)',
+                      StatusColors.ok,
+                      icon: Icons.visibility_outlined,
+                    ),
+                    ToolSafety.mayModify => const StatusChip(
                       'may modify data',
                       StatusColors.warn,
                       icon: Icons.warning_amber_rounded,
                     ),
+                    ToolSafety.unmarked => const StatusChip(
+                      'not marked read-only',
+                      StatusColors.warn,
+                      icon: Icons.help_outline,
+                    ),
+                  },
                   if (!effective.visible)
                     const StatusChip(
                       'hidden from Operator',

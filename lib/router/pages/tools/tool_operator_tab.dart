@@ -96,6 +96,24 @@ class _ToolOperatorTabState extends ConsumerState<ToolOperatorTab> {
               .read(toolRulesProvider.notifier)
               .setOverride(_key, override.copyWith(hidden: !visible)),
         ),
+        if (!tool.isReadOnly && !tool.declaresWrite)
+          SwitchListTile(
+            key: const ValueKey('tool-read-only-switch'),
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Treat as read-only'),
+            subtitle: Text(
+              override.readOnly
+                  ? 'The Operator calls it without asking you first. Only '
+                        'stored in this browser; the server is not told.'
+                  : 'The server does not say whether it changes anything, so '
+                        'the Operator asks before calling it. Turn on if you '
+                        'know it only reads.',
+            ),
+            value: override.readOnly,
+            onChanged: (on) => ref
+                .read(toolRulesProvider.notifier)
+                .setOverride(_key, override.copyWith(readOnly: on)),
+          ),
         const SizedBox(height: 8),
         TextField(
           controller: _instructions,

@@ -49,6 +49,7 @@ Toolbox buildToolboxWithInsight(Ref ref) {
         exposedName: name,
         serverName: entry.server.name,
         tool: entry.tool,
+        readOnly: effective.readOnly,
       ),
     );
   }
@@ -165,7 +166,7 @@ class _McpAgentTool extends AgentTool {
 
   @override
   bool get requiresApproval =>
-      !_tool.isReadOnly || _ref.read(appSettingsProvider).confirmReadOnly;
+      !_effective.readOnly || _ref.read(appSettingsProvider).confirmReadOnly;
 
   @override
   Future<AgentToolResult> run(Json args, ToolRunContext context) async {
