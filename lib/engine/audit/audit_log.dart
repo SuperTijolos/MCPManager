@@ -50,6 +50,7 @@ class AuditLog extends Notifier<List<AuditEvent>> {
     String? result,
     String? error,
     String? approval,
+    String? conversationId,
   }) {
     final event = AuditEvent(
       id: newId('evt'),
@@ -68,11 +69,25 @@ class AuditLog extends Notifier<List<AuditEvent>> {
       result: result,
       error: error,
       approval: approval,
+      conversationId: conversationId,
     );
     final next = [event, ...state];
     state = next.length > auditCapacity ? next.sublist(0, auditCapacity) : next;
     _persist();
     return event;
+  }
+
+  /// Deletes the events [test] accepts; returns how many went.
+  int removeWhere(bool Function(AuditEvent) test) {
+    final kept = [
+      for (final e in state)
+        if (!test(e)) e,
+    ];
+    final removed = state.length - kept.length;
+    if (removed == 0) return 0;
+    state = kept;
+    _persist();
+    return removed;
   }
 
   void clear() {

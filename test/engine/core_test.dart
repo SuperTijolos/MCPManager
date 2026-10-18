@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mcp_manager/engine/core/redact.dart';
 import 'package:mcp_manager/engine/core/url.dart';
@@ -81,6 +83,53 @@ void main() {
       final preview = redactedPreview({'a': 'x' * 5000}, max: 100);
       expect(preview.length, lessThan(160));
       expect(preview, contains('truncated'));
+    });
+
+    test('a long JSON result is shortened inside, so it still parses', () {
+      final result = jsonEncode({
+        'path': '/home/me/app.dart',
+        'content': "import 'dart:async';\n${'line of code\n' * 3000}",
+      });
+      final preview = redactedPreview(result);
+
+      expect(preview.length, lessThanOrEqualTo(2000));
+      final parsed = jsonDecode(preview) as Map;
+      expect(parsed['path'], '/home/me/app.dart');
+      expect(
+        parsed['content'],
+        startsWith("import 'dart:async';\nline of code"),
+      );
+      expect(parsed['content'], contains('[truncated'));
+      expect(previewWasShortened(preview), isTrue);
+    });
+
+    test('secrets are masked by key in JSON that arrives as text', () {
+      final preview = redactedPreview(
+        '{"user":"ana","password":"hunter2","nested":{"api_key":"abc"},'
+        '"note":"Bearer abcdefghijklmnop"}',
+      );
+      expect(preview, isNot(contains('hunter2')));
+      expect(preview, isNot(contains('abcdefghijklmnop')));
+      final parsed = jsonDecode(preview) as Map;
+      expect(parsed['user'], 'ana');
+      expect(parsed['password'], redacted);
+      expect((parsed['nested'] as Map)['api_key'], redacted);
+    });
+
+    test('long lists are cut with a count', () {
+      final preview = redactedPreview(
+        jsonEncode([for (var i = 0; i < 500; i++) 'item number $i']),
+        max: 600,
+      );
+      final parsed = jsonDecode(preview) as List;
+      expect(parsed.length, 21);
+      expect(parsed.last, contains('480 more items'));
+    });
+
+    test('text that only looks like JSON is treated as text', () {
+      expect(redactedPreview('{not json'), '{not json');
+      expect(previewWasShortened('plain'), isFalse);
+      expect(previewWasShortened(redactedPreview('x' * 3000)), isTrue);
     });
   });
 

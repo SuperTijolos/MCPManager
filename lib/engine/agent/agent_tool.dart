@@ -1,7 +1,14 @@
 import '../core/json.dart';
 
 class ToolRunContext {
-  const ToolRunContext({required this.actor, this.approval});
+  const ToolRunContext({
+    required this.actor,
+    this.approval,
+    this.conversationId,
+  });
+
+  /// The chat conversation the call belongs to, recorded in the audit log.
+  final String? conversationId;
 
   /// `operator:<model>`.
   final String actor;

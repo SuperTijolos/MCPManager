@@ -26,6 +26,7 @@ class AuditEvent {
     this.result,
     this.error,
     this.approval,
+    this.conversationId,
   });
 
   final String id;
@@ -56,6 +57,9 @@ class AuditEvent {
   /// session), `automatic` (the chat runs tools without asking) or `denied`. Null for actions that need no approval.
   final String? approval;
 
+  /// The chat conversation that made the call, when one did.
+  final String? conversationId;
+
   Json toJson() => {
     'id': id,
     'ts': timestamp.toIso8601String(),
@@ -73,6 +77,7 @@ class AuditEvent {
     if (result != null) 'result': result,
     if (error != null) 'error': error,
     if (approval != null) 'approval': approval,
+    if (conversationId != null) 'conv': conversationId,
   };
 
   factory AuditEvent.fromJson(Json json) => AuditEvent(
@@ -92,6 +97,7 @@ class AuditEvent {
     result: json['result'] as String?,
     error: json['error'] as String?,
     approval: json['approval'] as String?,
+    conversationId: json['conv'] as String?,
   );
 
   String get title => switch (kind) {

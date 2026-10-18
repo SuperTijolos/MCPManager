@@ -121,6 +121,7 @@ class _PlatformTool extends AgentTool {
           result: result == null ? null : redactedPreview(result),
           error: error == null ? null : redactText(error),
           approval: status == AuditStatus.denied ? 'denied' : context.approval,
+          conversationId: context.conversationId,
         );
   }
 }
@@ -674,6 +675,7 @@ List<AgentTool> platformTools(Ref ref) {
         toolName: 'clear_audit',
         result: 'Cleared $count events',
         approval: context.approval,
+        conversationId: context.conversationId,
       );
       return {'cleared': count};
     },

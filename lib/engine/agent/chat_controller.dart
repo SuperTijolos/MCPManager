@@ -530,6 +530,7 @@ class ChatController extends Notifier<ChatState> {
         contextTokens: config.effectiveContext,
       ),
       autoCompact: settings.autoCompact,
+      conversationId: state.activeId,
     );
   }
 

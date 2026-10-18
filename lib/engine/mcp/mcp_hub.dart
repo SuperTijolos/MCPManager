@@ -589,6 +589,7 @@ class McpHub extends Notifier<McpHubState> {
     String? approval,
     Json? clientArgs,
     Json? context,
+    String? conversationId,
   }) async {
     final runtime = state.byId(serverId);
     final audit = ref.read(auditLogProvider.notifier);
@@ -620,6 +621,7 @@ class McpHub extends Notifier<McpHubState> {
         context: contextPreview,
         error: message,
         approval: approval,
+        conversationId: conversationId,
       );
       return McpToolResult.error(message);
     }
@@ -644,6 +646,7 @@ class McpHub extends Notifier<McpHubState> {
         result: redactedPreview(result.text),
         error: result.isError ? redactedPreview(result.text, max: 500) : null,
         approval: approval,
+        conversationId: conversationId,
       );
       return result;
     } on McpException catch (e) {
@@ -663,6 +666,7 @@ class McpHub extends Notifier<McpHubState> {
         context: contextPreview,
         error: redactText(e.message),
         approval: approval,
+        conversationId: conversationId,
       );
       return McpToolResult.error(e.message);
     }

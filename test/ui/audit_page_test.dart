@@ -190,7 +190,7 @@ void main() {
       },
     );
 
-    testWidgets('MCP tool calls and dashboard activity are separate views', (
+    testWidgets('MCP tool calls and activity are separate views', (
       tester,
     ) async {
       final c = await pumpApp(tester);
@@ -213,11 +213,11 @@ void main() {
       await goTo(tester, '/audit');
 
       expect(find.text('MCP tools (4)'), findsOneWidget);
-      expect(find.text('Dashboard (2)'), findsOneWidget);
+      expect(find.text('Activity (2)'), findsOneWidget);
       expect(find.text('1–4 of 4'), findsOneWidget, reason: 'tools by default');
       expect(find.textContaining('Connect Docs'), findsNothing);
 
-      await tester.tap(find.text('Dashboard (2)'));
+      await tester.tap(find.text('Activity (2)'));
       await tester.pumpAndSettle();
       expect(find.text('1–2 of 2'), findsOneWidget);
       expect(find.textContaining('tool_1'), findsNothing);
@@ -225,14 +225,14 @@ void main() {
       expect(find.text('Manage · add_server'), findsOneWidget);
     });
 
-    testWidgets('an empty dashboard view explains what belongs there', (
+    testWidgets('an empty activity view explains what belongs there', (
       tester,
     ) async {
       await pumpApp(tester);
       await goTo(tester, '/audit');
-      await tester.tap(find.text('Dashboard (0)'));
+      await tester.tap(find.text('Activity (0)'));
       await tester.pumpAndSettle();
-      expect(find.text('No dashboard activity yet'), findsOneWidget);
+      expect(find.text('No activity yet'), findsOneWidget);
     });
 
     test('the log keeps up to a thousand events', () {

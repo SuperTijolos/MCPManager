@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../engine/core/json.dart';
 import '../../../engine/mcp/mcp_hub.dart';
 import '../../../engine/rules/tool_rules.dart';
 import '../../../engine/rules/tool_rules_store.dart';
@@ -12,9 +13,12 @@ import 'tool_test_tab.dart';
 
 /// One tool: description, badges, and the Test / Schema / Operator tabs.
 class ToolDetail extends ConsumerWidget {
-  const ToolDetail({super.key, required this.toolRef});
+  const ToolDetail({super.key, required this.toolRef, this.initialArgs});
 
   final ToolRef toolRef;
+
+  /// Starts the Test tab with these arguments (from an audit event).
+  final Json? initialArgs;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -106,7 +110,7 @@ class ToolDetail extends ConsumerWidget {
           Expanded(
             child: TabBarView(
               children: [
-                ToolTestTab(toolRef: toolRef),
+                ToolTestTab(toolRef: toolRef, initialArgs: initialArgs),
                 ToolSchemaTab(toolRef: toolRef),
                 ToolOperatorTab(toolRef: toolRef),
               ],

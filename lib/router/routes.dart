@@ -8,6 +8,7 @@ import 'pages/info/info_page.dart';
 import 'pages/overview/overview_page.dart';
 import 'pages/servers/servers_page.dart';
 import 'pages/settings/settings_page.dart';
+import 'pages/tools/tool_focus.dart';
 import 'pages/tools/tools_page.dart';
 import 'shell.dart';
 
@@ -68,7 +69,12 @@ GoRouter createRouter() => GoRouter(
         GoRoute(
           path: '/mcp-tools',
           name: 'MCP Tools',
-          pageBuilder: (c, s) => _page(const ToolsPage(), s),
+          pageBuilder: (c, s) => _page(
+            ToolsPage(
+              focus: s.extra is ToolFocus ? s.extra as ToolFocus : null,
+            ),
+            s,
+          ),
         ),
         GoRoute(path: '/tools', redirect: (c, s) => '/mcp-tools'),
         GoRoute(

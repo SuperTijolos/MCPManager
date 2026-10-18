@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../engine/core/json.dart';
 import '../../../engine/core/prefs.dart';
 import '../../../engine/mcp/mcp_hub.dart';
 import '../../../engine/rules/tool_rules_store.dart';
@@ -10,13 +11,17 @@ import '../../../ui/theme.dart';
 import '../../../ui/widgets.dart';
 import 'rules_tab.dart';
 import 'tool_detail.dart';
+import 'tool_focus.dart';
 import 'tool_list.dart';
 
 const _listWidthKey = 'mcpm.ui.toolsListWidth';
 const _defaultListWidth = 380.0;
 
 class ToolsPage extends ConsumerStatefulWidget {
-  const ToolsPage({super.key});
+  const ToolsPage({super.key, this.focus});
+
+  /// Open this tool on arrival (a link from the audit log).
+  final ToolFocus? focus;
 
   @override
   ConsumerState<ToolsPage> createState() => _ToolsPageState();
@@ -29,6 +34,35 @@ class _ToolsPageState extends ConsumerState<ToolsPage> {
   String? _focusedKey;
   bool _selectMode = false;
   final Set<String> _selected = {};
+
+  /// A tool to open once the layout is known, and the arguments to start with.
+  ToolFocus? _pendingFocus;
+  Json? _testArgs;
+  int _focusCount = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _applyFocus(widget.focus);
+  }
+
+  @override
+  void didUpdateWidget(ToolsPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.focus != oldWidget.focus) _applyFocus(widget.focus);
+  }
+
+  void _applyFocus(ToolFocus? focus) {
+    if (focus == null) return;
+    // Clear anything that could hide the tool being opened.
+    _query = '';
+    _serverId = null;
+    _filter = ToolListFilter.all;
+    _focusedKey = focus.key;
+    _testArgs = focus.args;
+    _pendingFocus = focus;
+    _focusCount++;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -96,6 +130,20 @@ class _ToolsPageState extends ConsumerState<ToolsPage> {
     );
   }
 
+  void _openNarrow(BuildContext context, ToolRef t, {Json? args}) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => Scaffold(
+          appBar: AppBar(title: Text(t.tool.name)),
+          body: Padding(
+            padding: const EdgeInsets.all(kPagePadding),
+            child: ToolDetail(toolRef: t, initialArgs: args),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _toolsTab(
     BuildContext context,
     McpHubState hub,
@@ -145,22 +193,26 @@ class _ToolsPageState extends ConsumerState<ToolsPage> {
           }),
           onOpen: (t) {
             if (wide) {
-              setState(() => _focusedKey = ToolList.keyOf(t));
+              setState(() {
+                _focusedKey = ToolList.keyOf(t);
+                _testArgs = null;
+              });
             } else {
-              Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => Scaffold(
-                    appBar: AppBar(title: Text(t.tool.name)),
-                    body: Padding(
-                      padding: const EdgeInsets.all(kPagePadding),
-                      child: ToolDetail(toolRef: t),
-                    ),
-                  ),
-                ),
-              );
+              _openNarrow(context, t);
             }
           },
         );
+        // A link from elsewhere: on a phone the tool opens as its own page.
+        if (_pendingFocus != null) {
+          _pendingFocus = null;
+          final target = focused;
+          if (!wide && target != null) {
+            final args = _testArgs;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) _openNarrow(context, target, args: args);
+            });
+          }
+        }
         if (!wide) return list;
 
         final prefs = ref.read(sharedPreferencesProvider);
@@ -181,8 +233,11 @@ class _ToolsPageState extends ConsumerState<ToolsPage> {
                             setState(() => _focusedKey = ToolList.keyOf(tool)),
                       )
                     : ToolDetail(
-                        key: ValueKey(ToolList.keyOf(focused)),
+                        key: ValueKey(
+                          '${ToolList.keyOf(focused)}#$_focusCount',
+                        ),
                         toolRef: focused,
+                        initialArgs: _testArgs,
                       ),
               ),
             ),

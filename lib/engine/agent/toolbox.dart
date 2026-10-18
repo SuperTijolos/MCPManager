@@ -187,6 +187,7 @@ class _McpAgentTool extends AgentTool {
               args: redactedPreview(args),
               error: 'Rejected before forwarding: ${prepared.error}',
               approval: context.approval,
+              conversationId: context.conversationId,
             );
       }
       return AgentToolResult(prepared.error!, isError: true);
@@ -202,6 +203,7 @@ class _McpAgentTool extends AgentTool {
           source: AuditSource.operator,
           actor: context.actor,
           approval: context.approval,
+          conversationId: context.conversationId,
         );
     return AgentToolResult(result.text, isError: result.isError);
   }

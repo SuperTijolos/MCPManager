@@ -18,9 +18,12 @@ import '../../../ui/widgets.dart';
 /// the same path as the Operator's: extra arguments are required and recorded,
 /// audit-only ones are stripped, fixed values are injected.
 class ToolTestTab extends ConsumerStatefulWidget {
-  const ToolTestTab({super.key, required this.toolRef});
+  const ToolTestTab({super.key, required this.toolRef, this.initialArgs});
 
   final ToolRef toolRef;
+
+  /// Replaces the schema-derived starting point, e.g. a call from the audit log.
+  final Json? initialArgs;
 
   @override
   ConsumerState<ToolTestTab> createState() => _ToolTestTabState();
@@ -48,6 +51,8 @@ class _ToolTestTabState extends ConsumerState<ToolTestTab> {
     super.initState();
     _applyRules = _effective.extras.isNotEmpty || _effective.fixed.isNotEmpty;
     _resetTemplate();
+    final initial = widget.initialArgs;
+    if (initial != null) _args.text = prettyJson(initial);
   }
 
   @override

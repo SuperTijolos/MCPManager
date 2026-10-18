@@ -102,7 +102,11 @@ class OperatorAgent {
     this.autoApprove = false,
     this.compactor,
     this.autoCompact = true,
+    this.conversationId,
   });
+
+  /// Stamped on the audit events of this run's tool calls.
+  final String? conversationId;
 
   /// Keeps long conversations inside the model's window.
   final ContextCompactor? compactor;
@@ -308,7 +312,11 @@ class OperatorAgent {
       if (decision == ApprovalDecision.deny || isCancelled()) {
         tool.onDenied(
           call.arguments,
-          ToolRunContext(actor: actor, approval: 'denied'),
+          ToolRunContext(
+            actor: actor,
+            approval: 'denied',
+            conversationId: conversationId,
+          ),
         );
         const message =
             'The user denied this tool call. Do not retry it; explain what you intended instead.';
@@ -324,7 +332,11 @@ class OperatorAgent {
     try {
       final result = await tool.run(
         call.arguments,
-        ToolRunContext(actor: actor, approval: approval),
+        ToolRunContext(
+          actor: actor,
+          approval: approval,
+          conversationId: conversationId,
+        ),
       );
       final outcome = result.isError ? ToolOutcome.error : ToolOutcome.success;
       emit(AgentToolFinished(call, outcome, result.text));

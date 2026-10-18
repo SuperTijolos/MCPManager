@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
@@ -25,6 +26,7 @@ Future<ProviderContainer> pumpApp(
   Map<String, Object> prefs = const {},
   Future<bool> Function(Uri)? openUrl,
   Size size = const Size(1280, 900),
+  List<Override> overrides = const [],
 }) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
@@ -51,6 +53,7 @@ Future<ProviderContainer> pumpApp(
         if (llm != null)
           llmProviderFactoryProvider.overrideWithValue((_) => llm),
         if (openUrl != null) openUrlProvider.overrideWithValue(openUrl),
+        ...overrides,
       ],
       child: const MCPManagerApp(),
     ),
