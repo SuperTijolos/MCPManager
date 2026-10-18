@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -71,6 +73,9 @@ class _ServerDialogState extends ConsumerState<ServerDialog> {
   bool _testing = false;
   ProbeResult? _probe;
 
+  /// What the form held when it opened, to tell whether there is anything to lose.
+  late final String _initial;
+
   bool get _editing => widget.existing != null;
 
   @override
@@ -101,6 +106,49 @@ class _ServerDialogState extends ConsumerState<ServerDialog> {
     _clientId = TextEditingController(text: c?.oauthClientId ?? '');
     _scope = TextEditingController(text: c?.oauthScope ?? '');
     _headers = [for (final e in extra.entries) _HeaderRow(e.key, e.value)];
+    _initial = _snapshot();
+  }
+
+  String _snapshot() => jsonEncode([
+    _name.text,
+    _url.text,
+    _token.text,
+    _clientId.text,
+    _scope.text,
+    for (final h in _headers) [h.name.text, h.value.text],
+    _auth.name,
+    _transport.name,
+  ]);
+
+  bool get _dirty => _snapshot() != _initial;
+
+  /// Closes the editor, asking first when there are unsaved edits.
+  Future<void> _close() async {
+    if (_dirty) {
+      final discard = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Discard changes?'),
+          content: Text(
+            _editing
+                ? 'Your edits to this server have not been saved.'
+                : 'This server has not been added yet.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Keep editing'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Discard'),
+            ),
+          ],
+        ),
+      );
+      if (discard != true) return;
+    }
+    if (mounted) Navigator.pop(context);
   }
 
   @override
@@ -232,79 +280,84 @@ class _ServerDialogState extends ConsumerState<ServerDialog> {
         ? null
         : ref.watch(mcpHubProvider).byId(widget.existing!.id);
 
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      appBar: AppBar(
-        automaticallyImplyLeading: false,
+    // Escape, the barrier and the back gesture all arrive here; saving and
+    // removing pop the route directly and so skip the confirmation.
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _close();
+      },
+      child: Scaffold(
         backgroundColor: Colors.transparent,
-        title: Text(_editing ? 'Edit server' : 'Add MCP server'),
-        actions: [
-          IconButton(
-            tooltip: 'Close',
-            icon: const Icon(Icons.close),
-            onPressed: () => Navigator.pop(context),
-          ),
-        ],
-      ),
-      body: Form(
-        key: _form,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final wide = constraints.maxWidth >= 800;
-            final connection = _editorPanel(theme, [
-              ..._connectionFields(theme, muted, typed, normalized),
-              ..._testFields(theme, muted, normalized),
-            ]);
-            final security = _editorPanel(theme, [
-              ..._authFields(theme),
-              ..._headerFields(theme),
-              ..._dangerFields(theme),
-            ]);
-            return SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  if (runtime != null) ...[
-                    _Status(runtime: runtime),
-                    const SizedBox(height: 12),
-                  ],
-                  if (wide)
-                    Row(
-                      key: const ValueKey('server-editor-columns'),
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(child: connection),
-                        const SizedBox(width: 16),
-                        Expanded(child: security),
-                      ],
-                    )
-                  else ...[
-                    connection,
-                    const SizedBox(height: 12),
-                    security,
-                  ],
-                ],
-              ),
-            );
-          },
-        ),
-      ),
-      bottomNavigationBar: Padding(
-        padding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            const SizedBox(width: 8),
-            FilledButton(
-              onPressed: _save,
-              child: Text(_editing ? 'Save' : 'Add & connect'),
+        appBar: AppBar(
+          automaticallyImplyLeading: false,
+          backgroundColor: Colors.transparent,
+          title: Text(_editing ? 'Edit server' : 'Add MCP server'),
+          actions: [
+            IconButton(
+              tooltip: 'Close',
+              icon: const Icon(Icons.close),
+              onPressed: _close,
             ),
           ],
+        ),
+        body: Form(
+          key: _form,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final wide = constraints.maxWidth >= 800;
+              final connection = _editorPanel(theme, [
+                ..._connectionFields(theme, muted, typed, normalized),
+                ..._testFields(theme, muted, normalized),
+              ]);
+              final security = _editorPanel(theme, [
+                ..._authFields(theme),
+                ..._headerFields(theme),
+                ..._dangerFields(theme),
+              ]);
+              return SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (runtime != null) ...[
+                      _Status(runtime: runtime),
+                      const SizedBox(height: 12),
+                    ],
+                    if (wide)
+                      Row(
+                        key: const ValueKey('server-editor-columns'),
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(child: connection),
+                          const SizedBox(width: 16),
+                          Expanded(child: security),
+                        ],
+                      )
+                    else ...[
+                      connection,
+                      const SizedBox(height: 12),
+                      security,
+                    ],
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+        bottomNavigationBar: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton(onPressed: _close, child: const Text('Cancel')),
+              const SizedBox(width: 8),
+              FilledButton(
+                onPressed: _save,
+                child: Text(_editing ? 'Save' : 'Add & connect'),
+              ),
+            ],
+          ),
         ),
       ),
     );

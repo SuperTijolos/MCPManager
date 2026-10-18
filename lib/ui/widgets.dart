@@ -275,6 +275,15 @@ String formatDateTime(DateTime t) {
   return '${t.year}-${two(t.month)}-${two(t.day)} ${formatTime(t)}';
 }
 
+/// "just now", "5 min ago", "3 h ago", then the full date for older times.
+String formatAgo(DateTime t, {DateTime? now}) {
+  final age = (now ?? DateTime.now()).difference(t);
+  if (age.inSeconds < 60) return 'just now';
+  if (age.inMinutes < 60) return '${age.inMinutes} min ago';
+  if (age.inHours < 24) return '${age.inHours} h ago';
+  return formatDateTime(t);
+}
+
 void showSnack(BuildContext context, String message) {
   ScaffoldMessenger.of(context)
     ..hideCurrentSnackBar()

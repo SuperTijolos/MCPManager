@@ -167,6 +167,8 @@ Future<ProviderContainer> makeContainer({
   final container = ProviderContainer(
     overrides: [
       sharedPreferencesProvider.overrideWithValue(sp),
+      // Tests call checkHealth() themselves instead of waiting on a timer.
+      mcpHealthIntervalProvider.overrideWithValue(null),
       oauthRedirectUriProvider.overrideWithValue(Uri.parse(oauthRedirect)),
       if (popupOpener != null)
         oauthPopupOpenerProvider.overrideWithValue(popupOpener),

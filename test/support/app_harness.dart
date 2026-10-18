@@ -36,6 +36,7 @@ Future<ProviderContainer> pumpApp(
     ProviderScope(
       overrides: [
         sharedPreferencesProvider.overrideWithValue(sp),
+        mcpHealthIntervalProvider.overrideWithValue(null),
         oauthRedirectUriProvider.overrideWithValue(Uri.parse(oauthRedirect)),
         if (oauth != null) ...[
           mcpHttpClientFactoryProvider.overrideWithValue(() => oauth.client),

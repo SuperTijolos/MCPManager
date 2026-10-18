@@ -34,6 +34,24 @@ class AuditStats {
 
   double get errorRate => total == 0 ? 0 : error / total;
 
+  /// When the log is full and its oldest event is newer than the start of
+  /// [window], older calls were dropped, so the window's statistics undercount.
+  /// Returns that oldest retained timestamp, or null when the window is
+  /// completely covered.
+  static DateTime? truncatedSince(
+    List<AuditEvent> events, {
+    required int capacity,
+    required Duration window,
+    DateTime? now,
+  }) {
+    if (events.length < capacity) return null;
+    final since = (now ?? DateTime.now()).subtract(window);
+    final oldest = events
+        .map((e) => e.timestamp)
+        .reduce((a, b) => a.isBefore(b) ? a : b);
+    return oldest.isAfter(since) ? oldest : null;
+  }
+
   /// Tool-call statistics for the last [window]. Connection events are not
   /// tool calls and are excluded.
   factory AuditStats.compute(

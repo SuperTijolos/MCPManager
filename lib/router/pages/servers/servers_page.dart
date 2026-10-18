@@ -36,16 +36,13 @@ class _ServersPageState extends ConsumerState<ServersPage> {
       subtitle: 'Connect and manage your MCP servers',
       actions: [
         IconButton(
-          tooltip: 'Reconnect all',
+          tooltip: hub.unavailable.isEmpty
+              ? 'Re-check enabled servers'
+              : 'Retry servers that are not connected',
           icon: const Icon(Icons.refresh),
-          onPressed: hub.servers.isEmpty
-              ? null
-              : () {
-                  final notifier = ref.read(mcpHubProvider.notifier);
-                  for (final s in hub.servers) {
-                    if (s.config.enabled) notifier.connect(s.config.id);
-                  }
-                },
+          onPressed: hub.servers.any((s) => s.config.enabled)
+              ? () => ref.read(mcpHubProvider.notifier).reconnectUnavailable()
+              : null,
         ),
         const SizedBox(width: 4),
         FilledButton.icon(
@@ -350,7 +347,7 @@ class _ServerCard extends ConsumerWidget {
                     'CHECKED',
                     runtime.checkedAt == null
                         ? '—'
-                        : formatTime(runtime.checkedAt!),
+                        : formatAgo(runtime.checkedAt!),
                   ),
                 ),
               ],
@@ -395,6 +392,14 @@ class _ServerCard extends ConsumerWidget {
                     onPressed: () => signInToServer(context, ref, config.id),
                     icon: const Icon(Icons.login_outlined, size: 18),
                     label: const Text('Sign in'),
+                  ),
+                if (config.enabled &&
+                    (runtime.status == ServerStatus.error ||
+                        runtime.status == ServerStatus.idle))
+                  TextButton.icon(
+                    onPressed: () => hub.connect(config.id),
+                    icon: const Icon(Icons.refresh, size: 18),
+                    label: const Text('Retry'),
                   ),
                 if (runtime.tools.isNotEmpty)
                   IconButton(
@@ -579,7 +584,8 @@ Future<void> _showServerDetails(BuildContext context, ServerRuntime runtime) {
                     'Last checked',
                     runtime.checkedAt == null
                         ? 'Not checked'
-                        : formatTime(runtime.checkedAt!),
+                        : '${formatDateTime(runtime.checkedAt!)} '
+                              '(${formatAgo(runtime.checkedAt!)})',
                   ),
                   if (runtime.info != null) ...[
                     _DetailFact(

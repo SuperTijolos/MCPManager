@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -123,6 +124,15 @@ class McpHubState {
   int get connectedCount =>
       servers.where((s) => s.status == ServerStatus.connected).length;
 
+  /// Enabled servers that are neither connected nor already connecting.
+  List<ServerRuntime> get unavailable => [
+    for (final s in servers)
+      if (s.config.enabled &&
+          s.status != ServerStatus.connected &&
+          s.status != ServerStatus.connecting)
+        s,
+  ];
+
   /// Tools from connected, enabled servers only.
   List<ToolRef> get availableTools => [
     for (final s in servers)
@@ -133,8 +143,30 @@ class McpHubState {
 
 final mcpHubProvider = NotifierProvider<McpHub, McpHubState>(McpHub.new);
 
+/// How often connected servers are pinged so a server that went away stops
+/// showing as connected. Null turns the background check off.
+final mcpHealthIntervalProvider = Provider<Duration?>(
+  (ref) => const Duration(minutes: 1),
+);
+
+/// A ping that failed with this code still proves the server is answering:
+/// JSON-RPC errors (e.g. "method not found" from servers without `ping`) and
+/// client-side HTTP errors other than the ones that mean a lost session.
+bool _answeredPing(McpException e) {
+  final code = e.code;
+  if (code == null) return false;
+  if (code < 0) return true;
+  return code >= 400 &&
+      code < 500 &&
+      code != 401 &&
+      code != 404 &&
+      code != 408 &&
+      code != 410;
+}
+
 class McpHub extends Notifier<McpHubState> {
   final _clients = <String, McpConnection>{};
+  bool _checkingHealth = false;
 
   @override
   McpHubState build() {
@@ -144,6 +176,11 @@ class McpHub extends Notifier<McpHubState> {
       }
       _clients.clear();
     });
+    final every = ref.read(mcpHealthIntervalProvider);
+    if (every != null) {
+      final timer = Timer.periodic(every, (_) => checkHealth());
+      ref.onDispose(timer.cancel);
+    }
 
     final raw = readJson(ref.read(sharedPreferencesProvider), _storageKey);
     final servers = <ServerRuntime>[];
@@ -176,6 +213,55 @@ class McpHub extends Notifier<McpHubState> {
         if (s.config.enabled && s.status == ServerStatus.idle)
           connect(s.config.id),
     ]);
+  }
+
+  /// Retries the servers that are down. When everything is up it re-checks
+  /// every enabled server instead, so a refresh never drops a working session
+  /// while something else needs a retry.
+  Future<void> reconnectUnavailable() async {
+    final down = state.unavailable;
+    final targets = down.isNotEmpty
+        ? down
+        : state.servers.where((s) => s.config.enabled);
+    await Future.wait([for (final s in targets) connect(s.config.id)]);
+  }
+
+  /// Pings every connected server. A reply refreshes "checked"; a server that
+  /// does not answer is reconnected right away, which either heals a blip or
+  /// records the outage (status and audit event) exactly once. Servers that
+  /// are already down are left alone, so an outage does not spam the log.
+  Future<void> checkHealth() async {
+    if (_checkingHealth) return;
+    _checkingHealth = true;
+    try {
+      await Future.wait([
+        for (final s in state.servers)
+          if (s.status == ServerStatus.connected) _pingOne(s.config.id),
+      ]);
+    } finally {
+      _checkingHealth = false;
+    }
+  }
+
+  Future<void> _pingOne(String id) async {
+    final client = _clients[id];
+    if (client == null) return;
+    try {
+      await client.ping().timeout(const Duration(seconds: 15));
+    } on McpException catch (e) {
+      if (!_answeredPing(e)) return _recover(id, client);
+    } catch (_) {
+      // Timeouts and anything unexpected both mean "no answer".
+      return _recover(id, client);
+    }
+    if (!ref.mounted || _clients[id] != client) return;
+    _setRuntime(id, (r) => r.copyWith(checkedAt: DateTime.now()));
+  }
+
+  Future<void> _recover(String id, McpConnection failed) async {
+    // The server may have been edited or reconnected while we were waiting.
+    if (!ref.mounted || _clients[id] != failed) return;
+    await connect(id);
   }
 
   Future<ServerRuntime> addServer({

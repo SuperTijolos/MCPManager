@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -30,9 +32,21 @@ enum _Window {
 
 class _OverviewPageState extends ConsumerState<OverviewPage> {
   final _scrollController = ScrollController();
+  Timer? _clock;
+
+  @override
+  void initState() {
+    super.initState();
+    // The statistics windows are relative to "now"; without a tick an open
+    // page would never age out old calls.
+    _clock = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
 
   @override
   void dispose() {
+    _clock?.cancel();
     _scrollController.dispose();
     super.dispose();
   }
@@ -40,16 +54,11 @@ class _OverviewPageState extends ConsumerState<OverviewPage> {
   _Window _window = _Window.day;
   bool _reconnecting = false;
 
-  Future<void> _reconnectAll() async {
+  Future<void> _reconnect() async {
     if (_reconnecting) return;
     setState(() => _reconnecting = true);
     try {
-      final servers = ref
-          .read(mcpHubProvider)
-          .servers
-          .where((s) => s.config.enabled);
-      final notifier = ref.read(mcpHubProvider.notifier);
-      await Future.wait(servers.map((s) => notifier.connect(s.config.id)));
+      await ref.read(mcpHubProvider.notifier).reconnectUnavailable();
     } finally {
       if (mounted) setState(() => _reconnecting = false);
     }
@@ -76,14 +85,23 @@ class _OverviewPageState extends ConsumerState<OverviewPage> {
         .where((s) => s.status == ServerStatus.connected)
         .length;
     final unavailable = enabled.length - connected;
+    // Not yet connected but not failed either (still connecting or waiting).
+    final pending = unavailable - attention.length;
+    final truncatedSince = AuditStats.truncatedSince(
+      events,
+      capacity: auditCapacity,
+      window: Duration(hours: _window.hours),
+    );
 
     return PageScaffold(
       title: 'Overview',
       subtitle: 'MCP infrastructure, tool activity and operator readiness',
       actions: [
         IconButton(
-          tooltip: 'Reconnect enabled servers',
-          onPressed: enabled.isEmpty || _reconnecting ? null : _reconnectAll,
+          tooltip: hub.unavailable.isEmpty
+              ? 'Re-check enabled servers'
+              : 'Retry servers that are not connected',
+          onPressed: enabled.isEmpty || _reconnecting ? null : _reconnect,
           icon: _reconnecting
               ? const SizedBox(
                   width: 20,
@@ -112,6 +130,7 @@ class _OverviewPageState extends ConsumerState<OverviewPage> {
             _WorkspaceBanner(
               connected: connected,
               enabled: enabled.length,
+              failed: attention.length,
               toolCount: hub.availableTools.length,
               modelReady: settings.isReady,
             ),
@@ -143,13 +162,19 @@ class _OverviewPageState extends ConsumerState<OverviewPage> {
                             ? 'No enabled servers'
                             : unavailable == 0
                             ? 'All servers connected'
-                            : '$unavailable unavailable',
+                            : [
+                                if (attention.isNotEmpty)
+                                  '${attention.length} need attention',
+                                if (pending > 0) '$pending connecting',
+                              ].join(' · '),
                         icon: Icons.dns_outlined,
                         color: enabled.isEmpty
                             ? StatusColors.muted
+                            : attention.isNotEmpty
+                            ? StatusColors.warn
                             : unavailable == 0
                             ? StatusColors.ok
-                            : StatusColors.warn,
+                            : StatusColors.info,
                         onTap: () => context.go('/mcp-servers'),
                       ),
                     ),
@@ -280,13 +305,34 @@ class _OverviewPageState extends ConsumerState<OverviewPage> {
               },
             ),
             const SizedBox(height: 12),
-            Text(
-              'Statistics are based on locally retained audit records '
-              '(up to $auditCapacity events). Older history may be incomplete.',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
+            if (truncatedSince != null)
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(
+                    Icons.info_outline,
+                    size: 16,
+                    color: StatusColors.warn,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'The audit log is full ($auditCapacity events), so '
+                      'the last ${_window.label} is incomplete: the oldest '
+                      'retained record is from ${formatDateTime(truncatedSince)}.',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                ],
+              )
+            else
+              Text(
+                'Statistics are based on locally retained audit records '
+                '(up to $auditCapacity events). Older history may be incomplete.',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
               ),
-            ),
           ],
         ),
       ),
@@ -298,12 +344,16 @@ class _WorkspaceBanner extends StatelessWidget {
   const _WorkspaceBanner({
     required this.connected,
     required this.enabled,
+    required this.failed,
     required this.toolCount,
     required this.modelReady,
   });
 
   final int connected;
   final int enabled;
+
+  /// Enabled servers in an error or sign-in-required state.
+  final int failed;
   final int toolCount;
   final bool modelReady;
 
@@ -312,16 +362,24 @@ class _WorkspaceBanner extends StatelessWidget {
     final theme = Theme.of(context);
     final noServers = enabled == 0;
     final allOnline = !noServers && connected == enabled;
+    final ready = allOnline && modelReady;
+    // Servers that are only still connecting are not a problem yet.
     final tint = noServers
         ? StatusColors.info
-        : allOnline
+        : failed > 0
+        ? StatusColors.warn
+        : ready
         ? StatusColors.ok
-        : StatusColors.warn;
+        : StatusColors.info;
     final headline = noServers
         ? 'Connect your first MCP server'
-        : allOnline
+        : failed > 0
+        ? 'Some connections need attention'
+        : !allOnline
+        ? 'Connecting to servers'
+        : modelReady
         ? 'Workspace ready'
-        : 'Some connections need attention';
+        : 'Servers connected';
     final summary = noServers
         ? 'Add a server to discover tools and start using your Operator.'
         : '$connected of $enabled servers connected · $toolCount tools ready'
@@ -332,7 +390,8 @@ class _WorkspaceBanner extends StatelessWidget {
       runSpacing: 8,
       children: [
         FilledButton.tonalIcon(
-          onPressed: () => context.go(noServers ? '/mcp-servers' : '/mcp-tools'),
+          onPressed: () =>
+              context.go(noServers ? '/mcp-servers' : '/mcp-tools'),
           icon: Icon(
             noServers ? Icons.add_rounded : Icons.build_outlined,
             size: 18,
@@ -379,9 +438,11 @@ class _WorkspaceBanner extends StatelessWidget {
                   child: Icon(
                     noServers
                         ? Icons.hub_outlined
+                        : failed > 0
+                        ? Icons.warning_amber_rounded
                         : allOnline
                         ? Icons.hub_rounded
-                        : Icons.warning_amber_rounded,
+                        : Icons.sync_rounded,
                     color: tint,
                     size: 25,
                   ),
@@ -576,22 +637,57 @@ class _AttentionCard extends StatelessWidget {
                   Expanded(
                     child: Text(
                       '${server.config.name} · ${server.status == ServerStatus.needsAuth ? 'Sign-in required' : server.error ?? 'Connection failed'}',
-                      maxLines: 1,
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
+                  _ServerAction(server),
                 ],
               ),
             ),
           if (servers.length > 3)
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Text('And ${servers.length - 3} more…'),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(
+                onPressed: () => context.go('/mcp-servers'),
+                child: Text('And ${servers.length - 3} more…'),
+              ),
             ),
         ],
       ),
     ),
   );
+}
+
+/// The one-click fix for a server that is down: sign in, or try again. Nothing
+/// for servers that are connected, connecting or disabled.
+class _ServerAction extends ConsumerWidget {
+  const _ServerAction(this.server);
+  final ServerRuntime server;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final (label, onPressed) = switch (server.status) {
+      ServerStatus.needsAuth => ('Sign in', () => context.go('/mcp-servers')),
+      ServerStatus.error || ServerStatus.idle when server.config.enabled => (
+        'Retry',
+        () => ref.read(mcpHubProvider.notifier).connect(server.config.id),
+      ),
+      _ => (null, null),
+    };
+    if (label == null) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(left: 6),
+      child: TextButton(
+        onPressed: onPressed,
+        style: TextButton.styleFrom(
+          visualDensity: VisualDensity.compact,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+        ),
+        child: Text(label),
+      ),
+    );
+  }
 }
 
 class _ActivityPanel extends StatelessWidget {
@@ -915,13 +1011,17 @@ class _ServerHealthPanel extends StatelessWidget {
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
                       ],
+                      _ServerAction(server),
                     ],
                   ),
                 ),
             if (ordered.length > 5)
-              Text(
-                '${ordered.length - 5} more servers',
-                style: Theme.of(context).textTheme.bodySmall,
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton(
+                  onPressed: () => context.go('/mcp-servers'),
+                  child: Text('${ordered.length - 5} more servers'),
+                ),
               ),
           ],
         ),
