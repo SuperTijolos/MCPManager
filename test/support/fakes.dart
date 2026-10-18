@@ -449,6 +449,9 @@ class FakeSseServer {
 
   void dropStream() => _stream?.close();
 
+  /// Emulate a network error while the long-lived SSE response is being read.
+  void failStream(Object error) => _stream?.addError(error);
+
   void _send(String text) {
     final bytes = utf8.encode(text);
     final c = _stream;

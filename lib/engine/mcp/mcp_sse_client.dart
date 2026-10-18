@@ -197,10 +197,17 @@ class McpSseClient implements McpConnection {
         .transform(const LineSplitter())
         .listen(
           _onLine,
-          onError: (Object e) => _onStreamEnd(generation, '$e'),
+          onError: (Object e, StackTrace stack) {
+            if (generation != _generation) return;
+            _onStreamEnd(generation, '$e');
+            // Explicitly handle the cancellation Future. The browser's
+            // ReadableStream reader may reject cancel() after a network error.
+            _cancelSubscription();
+          },
           onDone: () =>
               _onStreamEnd(generation, 'Connection closed by the server.'),
-          cancelOnError: true,
+          // Automatic cancellation cannot observe errors from reader.cancel().
+          cancelOnError: false,
         );
 
     try {
@@ -295,12 +302,21 @@ class McpSseClient implements McpConnection {
     _pending.clear();
   }
 
+  void _cancelSubscription() {
+    final sub = _subscription;
+    _subscription = null;
+    if (sub == null) return;
+    // package:http's BrowserClient uses ReadableStreamDefaultReader.cancel().
+    // A reader that already failed or was aborted can reject that request.
+    // Cancellation is best-effort; a rejected cleanup Future must not reach
+    // the unhandled-async-error handler or repeatedly interrupt the debugger.
+    unawaited(sub.cancel().catchError((Object _) {}));
+  }
+
   void _teardown(String reason) {
     _generation++;
     _connected = false;
-    final sub = _subscription;
-    _subscription = null;
-    sub?.cancel();
+    _cancelSubscription();
     _failAll(reason);
     _postUrl = null;
   }

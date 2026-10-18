@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -56,6 +57,34 @@ McpServerConfig _config(
   headers: headers,
   transport: transport,
 );
+
+/// Model BrowserClient's failure when cancelling an already-aborted fetch
+/// reader. A cleanup Future is allowed to fail even after a healthy session.
+http.Client _rejectingCancelClient(FakeSseServer server) =>
+    MockClient.streaming((request, bodyStream) async {
+      final response = await forwardTo(server.client, request, bodyStream);
+      if (request.method != 'GET' || request.url.path != '/sse') {
+        return response;
+      }
+      late final StreamSubscription<List<int>> inner;
+      final relay = StreamController<List<int>>(
+        sync: true,
+        onCancel: () async {
+          await inner.cancel();
+          throw StateError('ReadableStream reader.cancel() rejected');
+        },
+      );
+      inner = response.stream.listen(
+        relay.add,
+        onError: relay.addError,
+        onDone: relay.close,
+      );
+      return http.StreamedResponse(
+        relay.stream,
+        response.statusCode,
+        headers: response.headers,
+      );
+    });
 
 void main() {
   group('McpSseClient (legacy HTTP+SSE)', () {
@@ -299,6 +328,49 @@ void main() {
       expect(client.isConnected, isTrue);
       client.close();
     });
+
+    test(
+      'rejected reader cancellation never becomes an unhandled async error',
+      () async {
+        final server = _server();
+        final client = McpSseClient(
+          _config('http://localhost:3333/sse'),
+          httpClient: _rejectingCancelClient(server),
+        );
+        await client.connect();
+        // Reconnect tears down the prior stream; its async cancel() rejects.
+        await client.connect();
+        expect(client.isConnected, isTrue);
+        expect(server.sessions, 2);
+        // Closing the second stream must swallow the same cleanup error.
+        client.close();
+        await pumpEventQueue();
+        expect(client.isConnected, isFalse);
+        expect(server.streamsCancelled, 2);
+      },
+    );
+
+    test(
+      'a failed SSE read cancels safely and the next request reconnects',
+      () async {
+        final server = _server();
+        final client = McpSseClient(
+          _config('http://localhost:3333/sse'),
+          httpClient: _rejectingCancelClient(server),
+        );
+        await client.connect();
+        server.failStream(StateError('The browser stream lost its connection'));
+        await pumpEventQueue();
+        expect(client.isConnected, isFalse);
+        expect(server.streamsCancelled, 1);
+
+        expect((await client.callTool('fast', {})).text, 'fast done');
+        expect(server.sessions, 2);
+        client.close();
+        await pumpEventQueue();
+        expect(server.streamsCancelled, 2);
+      },
+    );
 
     test('close() cancels the stream', () async {
       final server = _server();
