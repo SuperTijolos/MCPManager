@@ -383,12 +383,28 @@ void main() {
     });
   });
 
+  testWidgets('desktop dialog shows two side-by-side settings panels', (
+    tester,
+  ) async {
+    await _open(tester, size: const Size(1280, 900));
+    await _openAdd(tester);
+    final panels = find.byKey(const ValueKey('server-editor-columns'));
+    expect(panels, findsOneWidget);
+    expect(find.text('Connection'), findsOneWidget);
+    expect(find.text('Authentication'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   group('phone width', () {
     testWidgets(
       'the dialog is full screen and everything fits, including results',
       (tester) async {
         await _open(tester, size: const Size(400, 800));
         await _openAdd(tester);
+        expect(
+          find.byKey(const ValueKey('server-editor-columns')),
+          findsNothing,
+        );
         await _fill(tester, url: 'https://mcp.test/mcp');
         await _tapVisible(tester, find.text('Add header'));
         await tester.tap(find.text('Bearer token').first);

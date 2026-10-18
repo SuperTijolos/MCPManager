@@ -23,7 +23,7 @@ Future<void> showServerDialog(
         : Dialog(
             insetPadding: const EdgeInsets.all(24),
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 680, maxHeight: 860),
+              constraints: const BoxConstraints(maxWidth: 960, maxHeight: 860),
               child: body,
             ),
           ),
@@ -248,253 +248,46 @@ class _ServerDialogState extends ConsumerState<ServerDialog> {
       ),
       body: Form(
         key: _form,
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (runtime != null) _Status(runtime: runtime),
-              _section(theme, 'Connection', Icons.link),
-              TextFormField(
-                controller: _name,
-                decoration: const InputDecoration(labelText: 'Name'),
-                validator: (v) => (v ?? '').trim().isEmpty ? 'Required' : null,
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _url,
-                keyboardType: TextInputType.url,
-                decoration: const InputDecoration(
-                  labelText: 'Endpoint URL',
-                  hintText: 'https://example.com/mcp',
-                ),
-                onChanged: (_) => setState(() => _probe = null),
-                validator: (v) => isValidHttpUrl(normalizeBaseUrl(v ?? ''))
-                    ? null
-                    : 'Enter a valid http(s) URL',
-              ),
-              if (typed.isNotEmpty &&
-                  normalized != typed &&
-                  isValidHttpUrl(normalized))
-                Padding(
-                  padding: const EdgeInsets.only(top: 4, left: 4),
-                  child: Text('Will connect to $normalized', style: muted),
-                ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<McpTransport>(
-                initialValue: _transport,
-                isExpanded: true,
-                decoration: const InputDecoration(
-                  labelText: 'Transport',
-                  helperText: 'Auto tries Streamable HTTP (…/mcp), then legacy SSE (…/sse).',
-                  helperMaxLines: 2,
-                ),
-                items: [
-                  for (final t in McpTransport.values)
-                    DropdownMenuItem(
-                      value: t,
-                      child: Text(t.label, overflow: TextOverflow.ellipsis),
-                    ),
-                ],
-                onChanged: (v) => setState(() {
-                  _transport = v ?? _transport;
-                  _probe = null;
-                }),
-              ),
-              _section(theme, 'Authentication', Icons.vpn_key_outlined),
-              SegmentedButton<_Auth>(
-                showSelectedIcon: false,
-                segments: const [
-                  ButtonSegment(value: _Auth.none, label: Text('None')),
-                  ButtonSegment(
-                    value: _Auth.bearer,
-                    label: Text('Bearer token'),
-                  ),
-                  ButtonSegment(value: _Auth.oauth, label: Text('OAuth')),
-                ],
-                selected: {_auth},
-                onSelectionChanged: (s) => setState(() {
-                  _auth = s.first;
-                  _probe = null;
-                }),
-              ),
-              if (_auth == _Auth.bearer) ...[
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _token,
-                  obscureText: !_showToken,
-                  autocorrect: false,
-                  enableSuggestions: false,
-                  decoration: InputDecoration(
-                    labelText: 'Bearer token',
-                    helperText: 'Stored in this browser only.',
-                    suffixIcon: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        IconButton(
-                          tooltip: _showToken ? 'Hide token' : 'Show token',
-                          icon: Icon(
-                            _showToken
-                                ? Icons.visibility_off_outlined
-                                : Icons.visibility_outlined,
-                            size: 20,
-                          ),
-                          onPressed: () =>
-                              setState(() => _showToken = !_showToken),
-                        ),
-                        IconButton(
-                          tooltip: 'Paste',
-                          icon: const Icon(Icons.content_paste, size: 20),
-                          onPressed: () async {
-                            final data = await Clipboard.getData(
-                              Clipboard.kTextPlain,
-                            );
-                            final text = data?.text?.trim();
-                            if (text != null && text.isNotEmpty) {
-                              setState(() => _token.text = text);
-                            }
-                          },
-                        ),
-                      ],
-                    ),
-                  ),
-                  validator: (v) =>
-                      _auth == _Auth.bearer && (v ?? '').trim().isEmpty
-                      ? 'Enter a token, or choose None'
-                      : null,
-                ),
-              ],
-              if (_auth == _Auth.oauth) ...[
-                const SizedBox(height: 12),
-                OAuthInfo(redirectUri: ref.watch(oauthRedirectUriProvider)),
-                const SizedBox(height: 8),
-                ExpansionTile(
-                  tilePadding: EdgeInsets.zero,
-                  title: const Text('Advanced'),
-                  children: [
-                    TextFormField(
-                      controller: _clientId,
-                      decoration: const InputDecoration(
-                        labelText: 'Client ID (optional)',
-                        helperText: 'Only if the server has no dynamic client registration.',
-                        helperMaxLines: 2,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      controller: _scope,
-                      decoration: const InputDecoration(
-                        labelText: 'Scope (optional)',
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                  ],
-                ),
-              ],
-              _section(theme, 'Extra headers', Icons.data_object),
-              for (var i = 0; i < _headers.length; i++)
-                Padding(
-                  key: ObjectKey(_headers[i]),
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        flex: 2,
-                        child: TextFormField(
-                          controller: _headers[i].name,
-                          decoration: const InputDecoration(
-                            hintText: 'Header name',
-                          ),
-                          validator: (v) {
-                            final name = (v ?? '').trim();
-                            if (name.isEmpty &&
-                                _headers[i].value.text.trim().isEmpty) {
-                              return null;
-                            }
-                            if (!_headerName.hasMatch(name)) {
-                              return 'Invalid name';
-                            }
-                            final dupes = _headers
-                                .where(
-                                  (h) =>
-                                      h.name.text.trim().toLowerCase() ==
-                                      name.toLowerCase(),
-                                )
-                                .length;
-                            return dupes > 1 ? 'Duplicate' : null;
-                          },
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        flex: 3,
-                        child: TextFormField(
-                          controller: _headers[i].value,
-                          decoration: const InputDecoration(hintText: 'Value'),
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: 'Remove header',
-                        icon: const Icon(Icons.close, size: 18),
-                        onPressed: () =>
-                            setState(() => _headers.removeAt(i).dispose()),
-                      ),
-                    ],
-                  ),
-                ),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: TextButton.icon(
-                  onPressed: () => setState(() => _headers.add(_HeaderRow())),
-                  icon: const Icon(Icons.add, size: 18),
-                  label: const Text('Add header'),
-                ),
-              ),
-              _section(theme, 'Try it', Icons.network_check),
-              Row(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final wide = constraints.maxWidth >= 800;
+            final connection = _editorPanel(theme, [
+              ..._connectionFields(theme, muted, typed, normalized),
+              ..._testFields(theme, muted, normalized),
+            ]);
+            final security = _editorPanel(theme, [
+              ..._authFields(theme),
+              ..._headerFields(theme),
+              ..._dangerFields(theme),
+            ]);
+            return SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  OutlinedButton.icon(
-                    onPressed: _testing ? null : _test,
-                    icon: _testing
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.play_arrow_rounded, size: 18),
-                    label: const Text('Test connection'),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      'Connects with these settings and lists the tools, without saving.',
-                      style: muted,
-                    ),
-                  ),
+                  if (runtime != null) ...[
+                    _Status(runtime: runtime),
+                    const SizedBox(height: 12),
+                  ],
+                  if (wide)
+                    Row(
+                      key: const ValueKey('server-editor-columns'),
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(child: connection),
+                        const SizedBox(width: 16),
+                        Expanded(child: security),
+                      ],
+                    )
+                  else ...[
+                    connection,
+                    const SizedBox(height: 12),
+                    security,
+                  ],
                 ],
               ),
-              if (_probe != null)
-                _ProbeCard(result: _probe!, requestedUrl: normalized),
-              if (_editing) ...[
-                _section(theme, 'Danger zone', Icons.warning_amber_rounded),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: OutlinedButton.icon(
-                    onPressed: _remove,
-                    icon: const Icon(Icons.delete_outline, size: 18),
-                    label: const Text('Remove this server'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: StatusColors.bad,
-                      side: BorderSide(
-                        color: StatusColors.bad.withValues(alpha: 0.5),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ],
-          ),
+            );
+          },
         ),
       ),
       bottomNavigationBar: Padding(
@@ -516,6 +309,274 @@ class _ServerDialogState extends ConsumerState<ServerDialog> {
       ),
     );
   }
+
+  /// Keep each part of the editor in a separate visual panel, without
+  /// separating their fields into multiple Forms (which could bypass validation).
+  Widget _editorPanel(ThemeData theme, List<Widget> children) => Container(
+    padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+    decoration: BoxDecoration(
+      borderRadius: BorderRadius.circular(16),
+      color: theme.colorScheme.surfaceContainerLow,
+      border: Border.all(
+        color: theme.colorScheme.outlineVariant.withValues(alpha: 0.55),
+      ),
+    ),
+    child: Material(
+      type: MaterialType.transparency,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: children,
+      ),
+    ),
+  );
+
+  List<Widget> _connectionFields(
+    ThemeData theme,
+    TextStyle? muted,
+    String typed,
+    String normalized,
+  ) => [
+    _section(theme, 'Connection', Icons.link),
+    TextFormField(
+      controller: _name,
+      decoration: const InputDecoration(labelText: 'Name'),
+      validator: (v) => (v ?? '').trim().isEmpty ? 'Required' : null,
+    ),
+    const SizedBox(height: 12),
+    TextFormField(
+      controller: _url,
+      keyboardType: TextInputType.url,
+      decoration: const InputDecoration(
+        labelText: 'Endpoint URL',
+        hintText: 'https://example.com/mcp',
+      ),
+      onChanged: (_) => setState(() => _probe = null),
+      validator: (v) => isValidHttpUrl(normalizeBaseUrl(v ?? ''))
+          ? null
+          : 'Enter a valid http(s) URL',
+    ),
+    if (typed.isNotEmpty && normalized != typed && isValidHttpUrl(normalized))
+      Padding(
+        padding: const EdgeInsets.only(top: 4, left: 4),
+        child: Text('Will connect to $normalized', style: muted),
+      ),
+    const SizedBox(height: 12),
+    DropdownButtonFormField<McpTransport>(
+      initialValue: _transport,
+      isExpanded: true,
+      decoration: const InputDecoration(
+        labelText: 'Transport',
+        helperText:
+            'Auto tries Streamable HTTP (…/mcp), then legacy SSE (…/sse).',
+        helperMaxLines: 2,
+      ),
+      items: [
+        for (final t in McpTransport.values)
+          DropdownMenuItem(
+            value: t,
+            child: Text(t.label, overflow: TextOverflow.ellipsis),
+          ),
+      ],
+      onChanged: (v) => setState(() {
+        _transport = v ?? _transport;
+        _probe = null;
+      }),
+    ),
+  ];
+
+  List<Widget> _authFields(ThemeData theme) => [
+    _section(theme, 'Authentication', Icons.vpn_key_outlined),
+    SegmentedButton<_Auth>(
+      showSelectedIcon: false,
+      segments: const [
+        ButtonSegment(value: _Auth.none, label: Text('None')),
+        ButtonSegment(value: _Auth.bearer, label: Text('Bearer token')),
+        ButtonSegment(value: _Auth.oauth, label: Text('OAuth')),
+      ],
+      selected: {_auth},
+      onSelectionChanged: (s) => setState(() {
+        _auth = s.first;
+        _probe = null;
+      }),
+    ),
+    if (_auth == _Auth.bearer) ...[
+      const SizedBox(height: 12),
+      TextFormField(
+        controller: _token,
+        obscureText: !_showToken,
+        autocorrect: false,
+        enableSuggestions: false,
+        decoration: InputDecoration(
+          labelText: 'Bearer token',
+          helperText: 'Stored in this browser only.',
+          suffixIcon: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                tooltip: _showToken ? 'Hide token' : 'Show token',
+                icon: Icon(
+                  _showToken
+                      ? Icons.visibility_off_outlined
+                      : Icons.visibility_outlined,
+                  size: 20,
+                ),
+                onPressed: () => setState(() => _showToken = !_showToken),
+              ),
+              IconButton(
+                tooltip: 'Paste',
+                icon: const Icon(Icons.content_paste, size: 20),
+                onPressed: () async {
+                  final data = await Clipboard.getData(Clipboard.kTextPlain);
+                  final text = data?.text?.trim();
+                  if (text != null && text.isNotEmpty) {
+                    setState(() => _token.text = text);
+                  }
+                },
+              ),
+            ],
+          ),
+        ),
+        validator: (v) => _auth == _Auth.bearer && (v ?? '').trim().isEmpty
+            ? 'Enter a token, or choose None'
+            : null,
+      ),
+    ],
+    if (_auth == _Auth.oauth) ...[
+      const SizedBox(height: 12),
+      OAuthInfo(redirectUri: ref.watch(oauthRedirectUriProvider)),
+      const SizedBox(height: 8),
+      ExpansionTile(
+        tilePadding: EdgeInsets.zero,
+        title: const Text('Advanced'),
+        children: [
+          TextFormField(
+            controller: _clientId,
+            decoration: const InputDecoration(
+              labelText: 'Client ID (optional)',
+              helperText:
+                  'Only if the server has no dynamic client registration.',
+              helperMaxLines: 2,
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextFormField(
+            controller: _scope,
+            decoration: const InputDecoration(labelText: 'Scope (optional)'),
+          ),
+          const SizedBox(height: 8),
+        ],
+      ),
+    ],
+  ];
+
+  List<Widget> _headerFields(ThemeData theme) => [
+    _section(theme, 'Extra headers', Icons.data_object),
+    for (var i = 0; i < _headers.length; i++)
+      Padding(
+        key: ObjectKey(_headers[i]),
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              flex: 2,
+              child: TextFormField(
+                controller: _headers[i].name,
+                decoration: const InputDecoration(hintText: 'Header name'),
+                validator: (v) {
+                  final name = (v ?? '').trim();
+                  if (name.isEmpty && _headers[i].value.text.trim().isEmpty) {
+                    return null;
+                  }
+                  if (!_headerName.hasMatch(name)) {
+                    return 'Invalid name';
+                  }
+                  final dupes = _headers
+                      .where(
+                        (h) =>
+                            h.name.text.trim().toLowerCase() ==
+                            name.toLowerCase(),
+                      )
+                      .length;
+                  return dupes > 1 ? 'Duplicate' : null;
+                },
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              flex: 3,
+              child: TextFormField(
+                controller: _headers[i].value,
+                decoration: const InputDecoration(hintText: 'Value'),
+              ),
+            ),
+            IconButton(
+              tooltip: 'Remove header',
+              icon: const Icon(Icons.close, size: 18),
+              onPressed: () => setState(() => _headers.removeAt(i).dispose()),
+            ),
+          ],
+        ),
+      ),
+    Align(
+      alignment: Alignment.centerLeft,
+      child: TextButton.icon(
+        onPressed: () => setState(() => _headers.add(_HeaderRow())),
+        icon: const Icon(Icons.add, size: 18),
+        label: const Text('Add header'),
+      ),
+    ),
+  ];
+
+  List<Widget> _testFields(
+    ThemeData theme,
+    TextStyle? muted,
+    String normalized,
+  ) => [
+    _section(theme, 'Try it', Icons.network_check),
+    Row(
+      children: [
+        OutlinedButton.icon(
+          onPressed: _testing ? null : _test,
+          icon: _testing
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.play_arrow_rounded, size: 18),
+          label: const Text('Test connection'),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            'Connects with these settings and lists the tools, without saving.',
+            style: muted,
+          ),
+        ),
+      ],
+    ),
+    if (_probe != null) _ProbeCard(result: _probe!, requestedUrl: normalized),
+  ];
+
+  List<Widget> _dangerFields(ThemeData theme) => [
+    if (_editing) ...[
+      _section(theme, 'Danger zone', Icons.warning_amber_rounded),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: OutlinedButton.icon(
+          onPressed: _remove,
+          icon: const Icon(Icons.delete_outline, size: 18),
+          label: const Text('Remove this server'),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: StatusColors.bad,
+            side: BorderSide(color: StatusColors.bad.withValues(alpha: 0.5)),
+          ),
+        ),
+      ),
+    ],
+  ];
 
   Widget _section(ThemeData theme, String title, IconData icon) => Padding(
     padding: const EdgeInsets.only(top: 24, bottom: 10),

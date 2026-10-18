@@ -20,6 +20,7 @@ void main() {
     (const Size(1724, 1000), 3),
     (const Size(1100, 900), 2),
     (const Size(420, 900), 1),
+    (const Size(360, 800), 1),
   ]) {
     testWidgets('Servers use $columns columns at ${size.width} px', (
       tester,
@@ -50,5 +51,13 @@ void main() {
     await tester.tap(find.text('Close').last);
     await tester.pumpAndSettle();
     expect(find.text('Connection trace'), findsNothing);
+  });
+
+  testWidgets('connection details fit on a small screen', (tester) async {
+    await _withServers(tester, const Size(360, 760));
+    await tester.tap(find.text('Connection details').first);
+    await tester.pumpAndSettle();
+    expect(find.text('Connection trace'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 }
