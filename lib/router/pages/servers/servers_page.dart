@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -32,7 +33,7 @@ class _ServersPageState extends ConsumerState<ServersPage> {
 
     return PageScaffold(
       title: 'Servers',
-      subtitle: 'Downstream MCP servers (Streamable HTTP or legacy SSE)',
+      subtitle: 'Connect and manage your MCP servers',
       actions: [
         IconButton(
           tooltip: 'Reconnect all',
@@ -42,7 +43,7 @@ class _ServersPageState extends ConsumerState<ServersPage> {
               : () {
                   final notifier = ref.read(mcpHubProvider.notifier);
                   for (final s in hub.servers) {
-                    notifier.connect(s.config.id);
+                    if (s.config.enabled) notifier.connect(s.config.id);
                   }
                 },
         ),
@@ -65,27 +66,50 @@ class _ServersPageState extends ConsumerState<ServersPage> {
               ),
             )
           : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                _ServerSummary(servers: hub.servers),
+                const SizedBox(height: 16),
                 TextField(
-                  decoration: const InputDecoration(
-                    prefixIcon: Icon(Icons.search),
+                  decoration: InputDecoration(
+                    prefixIcon: const Icon(Icons.search),
                     hintText: 'Search servers',
+                    suffixText: '${servers.length} shown',
                   ),
                   onChanged: (v) =>
                       setState(() => _query = v.trim().toLowerCase()),
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 16),
                 Expanded(
                   child: servers.isEmpty
                       ? const EmptyState(
                           icon: Icons.search_off,
                           title: 'No matching servers',
                         )
-                      : ListView.separated(
-                          itemCount: servers.length,
-                          separatorBuilder: (_, _) =>
-                              const SizedBox(height: 10),
-                          itemBuilder: (context, i) => _ServerCard(servers[i]),
+                      : LayoutBuilder(
+                          builder: (context, constraints) {
+                            // Keep each card wide enough for its quick actions.
+                            final columns = constraints.maxWidth >= 1140
+                                ? 3
+                                : constraints.maxWidth >= 740
+                                ? 2
+                                : 1;
+                            return GridView.builder(
+                              key: const ValueKey('server-grid'),
+                              gridDelegate:
+                                  SliverGridDelegateWithFixedCrossAxisCount(
+                                    crossAxisCount: columns,
+                                    crossAxisSpacing: 12,
+                                    mainAxisSpacing: 12,
+                                    mainAxisExtent: 338,
+                                  ),
+                              itemCount: servers.length,
+                              itemBuilder: (context, index) => _ServerCard(
+                                key: ValueKey(servers[index].config.id),
+                                runtime: servers[index],
+                              ),
+                            );
+                          },
                         ),
                 ),
               ],
@@ -94,39 +118,105 @@ class _ServersPageState extends ConsumerState<ServersPage> {
   }
 }
 
-class _ServerCard extends ConsumerWidget {
-  const _ServerCard(this.runtime);
-  final ServerRuntime runtime;
+class _ServerSummary extends StatelessWidget {
+  const _ServerSummary({required this.servers});
+  final List<ServerRuntime> servers;
 
-  (String, Color, IconData) get _status => switch (runtime.status) {
-    ServerStatus.connected => (
-      'Connected',
-      StatusColors.ok,
-      Icons.check_circle_outline,
-    ),
-    ServerStatus.connecting => ('Connecting', StatusColors.info, Icons.sync),
-    ServerStatus.needsAuth => (
-      'Sign-in required',
-      StatusColors.warn,
-      Icons.lock_outline,
-    ),
-    ServerStatus.error => ('Error', StatusColors.bad, Icons.error_outline),
-    ServerStatus.disabled => (
-      'Disabled',
-      StatusColors.muted,
-      Icons.pause_circle_outline,
-    ),
-    ServerStatus.idle => ('Idle', StatusColors.muted, Icons.circle_outlined),
-  };
+  @override
+  Widget build(BuildContext context) {
+    final connected = servers
+        .where((s) => s.status == ServerStatus.connected)
+        .length;
+    final attention = servers
+        .where(
+          (s) =>
+              s.status == ServerStatus.error ||
+              s.status == ServerStatus.needsAuth,
+        )
+        .length;
+    final theme = Theme.of(context);
+    return Wrap(
+      spacing: 18,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        _SummaryStat(
+          Icons.dns_outlined,
+          '${servers.length} total',
+          theme.colorScheme.onSurfaceVariant,
+        ),
+        _SummaryStat(
+          Icons.check_circle_outline,
+          '$connected connected',
+          StatusColors.ok,
+        ),
+        if (attention > 0)
+          _SummaryStat(
+            Icons.warning_amber_rounded,
+            '$attention need attention',
+            StatusColors.warn,
+          ),
+      ],
+    );
+  }
+}
+
+class _SummaryStat extends StatelessWidget {
+  const _SummaryStat(this.icon, this.label, this.color);
+  final IconData icon;
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Icon(icon, color: color, size: 16),
+      const SizedBox(width: 6),
+      Text(label, style: Theme.of(context).textTheme.bodySmall),
+    ],
+  );
+}
+
+(String, Color, IconData) _serverStatus(ServerStatus status) =>
+    switch (status) {
+      ServerStatus.connected => (
+        'Connected',
+        StatusColors.ok,
+        Icons.check_circle_outline,
+      ),
+      ServerStatus.connecting => ('Connecting', StatusColors.info, Icons.sync),
+      ServerStatus.needsAuth => (
+        'Sign-in required',
+        StatusColors.warn,
+        Icons.lock_outline,
+      ),
+      ServerStatus.error => ('Error', StatusColors.bad, Icons.error_outline),
+      ServerStatus.disabled => (
+        'Disabled',
+        StatusColors.muted,
+        Icons.pause_circle_outline,
+      ),
+      ServerStatus.idle => ('Idle', StatusColors.muted, Icons.circle_outlined),
+    };
+
+class _ServerCard extends ConsumerWidget {
+  const _ServerCard({super.key, required this.runtime});
+  final ServerRuntime runtime;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final hub = ref.read(mcpHubProvider.notifier);
-    final (label, color, icon) = _status;
+    final (label, color, icon) = _serverStatus(runtime.status);
     final config = runtime.config;
+    final muted = theme.textTheme.bodySmall?.copyWith(
+      color: theme.colorScheme.onSurfaceVariant,
+    );
 
     return Card(
+      margin: EdgeInsets.zero,
+      clipBehavior: Clip.antiAlias,
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -134,149 +224,177 @@ class _ServerCard extends ConsumerWidget {
           children: [
             Row(
               children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(config.name, style: theme.textTheme.titleMedium),
-                      Text(
-                        config.url,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(10),
                   ),
+                  child: Icon(Icons.dns_outlined, color: color, size: 20),
                 ),
-                Wrap(
-                  spacing: 6,
-                  children: [
-                    if (config.transport == McpTransport.sse)
-                      const StatusChip('SSE', StatusColors.muted),
-                    if (config.oauth)
-                      const StatusChip(
-                        'OAuth',
-                        StatusColors.info,
-                        icon: Icons.vpn_key_outlined,
-                      ),
-                    StatusChip(label, color, icon: icon),
-                  ],
-                ),
+                const Spacer(),
+                StatusChip(label, color, icon: icon),
               ],
             ),
             const SizedBox(height: 10),
+            Text(
+              config.name,
+              style: theme.textTheme.titleMedium,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 3),
+            Tooltip(
+              message: config.url,
+              child: Text(
+                config.url,
+                style: muted,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(height: 10),
             Wrap(
-              spacing: 16,
+              spacing: 6,
               runSpacing: 4,
               children: [
-                if (runtime.info != null)
-                  _Fact(
-                    'Server',
-                    '${runtime.info!.name} ${runtime.info!.version}',
+                StatusChip(
+                  config.transport == McpTransport.auto
+                      ? 'Auto transport'
+                      : config.transport.label,
+                  StatusColors.muted,
+                ),
+                if (config.oauth)
+                  const StatusChip(
+                    'OAuth',
+                    StatusColors.info,
+                    icon: Icons.vpn_key_outlined,
+                  )
+                else if (config.hasStaticAuthorization)
+                  const StatusChip(
+                    'Token',
+                    StatusColors.muted,
+                    icon: Icons.key_outlined,
                   ),
-                if (runtime.info != null)
-                  _Fact('Protocol', runtime.info!.protocolVersion),
-                _Fact('Tools', '${runtime.tools.length}'),
-                if (runtime.latencyMs != null)
-                  _Fact('Connect', '${runtime.latencyMs} ms'),
-                if (runtime.checkedAt != null)
-                  _Fact('Checked', formatTime(runtime.checkedAt!)),
               ],
             ),
-            if (runtime.error != null) ...[
-              const SizedBox(height: 10),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color:
-                      (runtime.status == ServerStatus.needsAuth
-                              ? StatusColors.warn
-                              : StatusColors.bad)
-                          .withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(8),
+            const SizedBox(height: 12),
+            Divider(height: 1, color: theme.dividerColor),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: _CardMetric('TOOLS', '${runtime.tools.length}'),
                 ),
-                child: SelectableText(
-                  runtime.error!,
-                  style: const TextStyle(fontSize: 12.5),
-                ),
-              ),
-            ],
-            if (runtime.trace.isNotEmpty)
-              Theme(
-                data: theme.copyWith(dividerColor: Colors.transparent),
-                child: ExpansionTile(
-                  tilePadding: EdgeInsets.zero,
-                  dense: true,
-                  title: Text(
-                    'Connection details',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
+                Expanded(
+                  child: _CardMetric(
+                    'CONNECT',
+                    runtime.latencyMs == null ? '—' : '${runtime.latencyMs} ms',
                   ),
+                ),
+                Expanded(
+                  child: _CardMetric(
+                    'CHECKED',
+                    runtime.checkedAt == null
+                        ? '—'
+                        : formatTime(runtime.checkedAt!),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (runtime.error != null)
+              Tooltip(
+                message: runtime.error!,
+                child: Row(
                   children: [
-                    CodeBlock(runtime.trace.join('\n'), maxHeight: 200),
-                    const SizedBox(height: 8),
+                    const Icon(
+                      Icons.error_outline,
+                      size: 14,
+                      color: StatusColors.bad,
+                    ),
+                    const SizedBox(width: 5),
+                    Expanded(
+                      child: Text(
+                        runtime.error!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: muted?.copyWith(color: StatusColors.bad),
+                      ),
+                    ),
                   ],
                 ),
               )
             else
-              const SizedBox(height: 8),
+              Text(
+                runtime.info == null
+                    ? 'Awaiting server information'
+                    : '${runtime.info!.name} · ${runtime.info!.version}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: muted,
+              ),
+            const Spacer(),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () => _showServerDetails(context, runtime),
+                icon: const Icon(Icons.notes_rounded, size: 16),
+                label: const Text('Connection details'),
+              ),
+            ),
+            Divider(height: 1, color: theme.dividerColor),
+            const SizedBox(height: 4),
             Row(
               children: [
-                Switch(
+                Switch.adaptive(
                   value: config.enabled,
-                  onChanged: (v) => hub.setEnabled(config.id, v),
+                  onChanged: (value) => hub.setEnabled(config.id, value),
                 ),
-                const Text('Enabled'),
-                Expanded(
-                  child: Wrap(
-                    alignment: WrapAlignment.end,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      if (runtime.status == ServerStatus.needsAuth)
-                        FilledButton.tonalIcon(
-                          onPressed: () =>
-                              signInToServer(context, ref, config.id),
-                          icon: const Icon(Icons.login, size: 18),
-                          label: const Text('Sign in'),
-                        ),
-                      if (config.oauth &&
-                          runtime.status == ServerStatus.connected)
-                        TextButton.icon(
-                          onPressed: () => hub.signOut(config.id),
-                          icon: const Icon(Icons.logout, size: 18),
-                          label: const Text('Sign out'),
-                        ),
-                      if (runtime.tools.isNotEmpty)
-                        TextButton.icon(
-                          onPressed: () => context.go('/tools'),
-                          icon: const Icon(Icons.build_outlined, size: 18),
-                          label: const Text('Tools'),
-                        ),
-                      IconButton(
-                        tooltip: 'Reconnect',
-                        icon: const Icon(Icons.refresh),
-                        onPressed:
-                            config.enabled &&
-                                runtime.status != ServerStatus.connecting
-                            ? () => hub.connect(config.id)
-                            : null,
-                      ),
-                      IconButton(
-                        tooltip: 'Edit',
-                        icon: const Icon(Icons.edit_outlined),
-                        onPressed: () =>
-                            showServerDialog(context, existing: config),
-                      ),
-                      IconButton(
-                        tooltip: 'Remove',
-                        icon: const Icon(Icons.delete_outline),
-                        onPressed: () => _confirmRemove(context, hub),
-                      ),
-                    ],
+                Expanded(child: Text('Enabled', style: muted, maxLines: 1)),
+                if (runtime.status == ServerStatus.needsAuth)
+                  IconButton(
+                    tooltip: 'Sign in',
+                    icon: const Icon(Icons.login_outlined),
+                    onPressed: () => signInToServer(context, ref, config.id),
                   ),
+                if (runtime.tools.isNotEmpty)
+                  IconButton(
+                    tooltip: 'Tools',
+                    icon: const Icon(Icons.build_outlined),
+                    onPressed: () => context.go('/tools'),
+                  ),
+                IconButton(
+                  tooltip: 'Edit',
+                  icon: const Icon(Icons.edit_outlined),
+                  onPressed: () => showServerDialog(context, existing: config),
+                ),
+                PopupMenuButton<_ServerAction>(
+                  tooltip: 'More server actions',
+                  onSelected: (action) => switch (action) {
+                    _ServerAction.reconnect => hub.connect(config.id),
+                    _ServerAction.signOut => hub.signOut(config.id),
+                    _ServerAction.remove => _confirmRemove(context, hub),
+                  },
+                  itemBuilder: (context) => [
+                    if (config.enabled &&
+                        runtime.status != ServerStatus.connecting)
+                      const PopupMenuItem(
+                        value: _ServerAction.reconnect,
+                        child: _ActionLabel(Icons.refresh, 'Reconnect'),
+                      ),
+                    if (config.oauth &&
+                        runtime.status == ServerStatus.connected)
+                      const PopupMenuItem(
+                        value: _ServerAction.signOut,
+                        child: _ActionLabel(Icons.logout, 'Sign out'),
+                      ),
+                    const PopupMenuItem(
+                      value: _ServerAction.remove,
+                      child: _ActionLabel(Icons.delete_outline, 'Remove'),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -310,23 +428,186 @@ class _ServerCard extends ConsumerWidget {
   }
 }
 
-class _Fact extends StatelessWidget {
-  const _Fact(this.label, this.value);
+enum _ServerAction { reconnect, signOut, remove }
+
+class _ActionLabel extends StatelessWidget {
+  const _ActionLabel(this.icon, this.title);
+  final IconData icon;
+  final String title;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    children: [Icon(icon, size: 18), const SizedBox(width: 12), Text(title)],
+  );
+}
+
+class _CardMetric extends StatelessWidget {
+  const _CardMetric(this.label, this.value);
   final String label;
   final String value;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return RichText(
-      text: TextSpan(
-        style: theme.textTheme.bodySmall,
-        children: [
-          TextSpan(
-            text: '$label  ',
-            style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
           ),
-          TextSpan(text: value),
+          maxLines: 1,
+        ),
+        const SizedBox(height: 3),
+        Text(
+          value,
+          style: theme.textTheme.titleSmall?.copyWith(
+            fontWeight: FontWeight.w600,
+          ),
+          overflow: TextOverflow.ellipsis,
+          maxLines: 1,
+        ),
+      ],
+    );
+  }
+}
+
+Future<void> _showServerDetails(BuildContext context, ServerRuntime runtime) {
+  final config = runtime.config;
+  final (label, color, icon) = _serverStatus(runtime.status);
+  return showDialog<void>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: Row(
+        children: [
+          Expanded(child: Text(config.name, overflow: TextOverflow.ellipsis)),
+          IconButton(
+            tooltip: 'Close details',
+            onPressed: () => Navigator.pop(dialogContext),
+            icon: const Icon(Icons.close),
+          ),
+        ],
+      ),
+      content: SizedBox(
+        width: 620,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              StatusChip(label, color, icon: icon),
+              const SizedBox(height: 16),
+              SelectableText(
+                config.url,
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 6),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: () =>
+                      Clipboard.setData(ClipboardData(text: config.url)),
+                  icon: const Icon(Icons.copy_rounded, size: 16),
+                  label: const Text('Copy endpoint'),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 22,
+                runSpacing: 16,
+                children: [
+                  _DetailFact('Transport', config.transport.label),
+                  _DetailFact(
+                    'Authentication',
+                    config.oauth
+                        ? 'OAuth'
+                        : config.hasStaticAuthorization
+                        ? 'Bearer token'
+                        : 'None',
+                  ),
+                  _DetailFact('Tools', '${runtime.tools.length}'),
+                  _DetailFact(
+                    'Connect latency',
+                    runtime.latencyMs == null
+                        ? 'Not measured'
+                        : '${runtime.latencyMs} ms',
+                  ),
+                  _DetailFact(
+                    'Last checked',
+                    runtime.checkedAt == null
+                        ? 'Not checked'
+                        : formatTime(runtime.checkedAt!),
+                  ),
+                  if (runtime.info != null) ...[
+                    _DetailFact(
+                      'Server software',
+                      '${runtime.info!.name} ${runtime.info!.version}',
+                    ),
+                    _DetailFact('MCP protocol', runtime.info!.protocolVersion),
+                  ],
+                ],
+              ),
+              if (runtime.error != null) ...[
+                const SizedBox(height: 18),
+                SelectableText(
+                  runtime.error!,
+                  style: const TextStyle(color: StatusColors.bad),
+                ),
+              ],
+              const SizedBox(height: 18),
+              Text(
+                'Connection trace',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              const SizedBox(height: 8),
+              if (runtime.trace.isEmpty)
+                const Text('No connection attempts recorded yet.')
+              else
+                CodeBlock(runtime.trace.join('\n'), maxHeight: 260),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext),
+          child: const Text('Close'),
+        ),
+        FilledButton.tonalIcon(
+          onPressed: () {
+            Navigator.pop(dialogContext);
+            showServerDialog(context, existing: config);
+          },
+          icon: const Icon(Icons.edit_outlined, size: 18),
+          label: const Text('Edit server'),
+        ),
+      ],
+    ),
+  );
+}
+
+class _DetailFact extends StatelessWidget {
+  const _DetailFact(this.label, this.value);
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return SizedBox(
+      width: 180,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 3),
+          SelectableText(value, style: theme.textTheme.bodyMedium),
         ],
       ),
     );
