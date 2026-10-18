@@ -270,10 +270,14 @@ class _ArgRow extends StatelessWidget {
                 style: const TextStyle(fontFamilyFallback: monoFonts),
               ),
             ),
-            Text(
-              '  $type${required ? ' · required' : ''}',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+            Flexible(
+              child: Text(
+                '  $type${required ? ' · required' : ''}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
               ),
             ),
           ],
