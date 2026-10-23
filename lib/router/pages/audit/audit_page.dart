@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -16,6 +14,7 @@ import '../../../engine/mcp/mcp_hub.dart';
 import '../../../engine/rules/tool_rules.dart' show toolKey;
 import '../../../ui/download.dart';
 import '../../../ui/pagination.dart';
+import '../../../ui/preview_section.dart';
 import '../../../ui/theme.dart';
 import '../../../ui/widgets.dart';
 import '../overview/overview_page.dart' show statusColor, statusIcon;
@@ -1006,7 +1005,7 @@ class _AuditDetailDialog extends ConsumerWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       if (event.args != null)
-                        _PreviewSection(
+                        PreviewSection(
                           event.forwarded != null
                               ? 'Arguments from the model'
                               : 'Arguments',
@@ -1014,21 +1013,21 @@ class _AuditDetailDialog extends ConsumerWidget {
                           200,
                         ),
                       if (event.forwarded != null)
-                        _PreviewSection(
+                        PreviewSection(
                           'Forwarded to the server',
                           event.forwarded!,
                           200,
                         ),
                       if (event.context != null)
-                        _PreviewSection(
+                        PreviewSection(
                           'Audit-only context (not sent to the server)',
                           event.context!,
                           140,
                         ),
                       if (event.result != null)
-                        _PreviewSection('Result', event.result!, 260),
+                        PreviewSection('Result', event.result!, 260),
                       if (event.error != null)
-                        _PreviewSection('Error', event.error!, 180),
+                        PreviewSection('Error', event.error!, 180),
                     ],
                   ),
                 ),
@@ -1089,73 +1088,6 @@ class _AuditDetailDialog extends ConsumerWidget {
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-/// One recorded value in the detail dialog. JSON that holds file contents or
-/// other long text is shown as readable lines instead of one escaped string,
-/// with a switch back to the raw JSON.
-class _PreviewSection extends StatefulWidget {
-  const _PreviewSection(this.label, this.text, this.maxHeight);
-  final String label;
-  final String text;
-  final double maxHeight;
-
-  @override
-  State<_PreviewSection> createState() => _PreviewSectionState();
-}
-
-class _PreviewSectionState extends State<_PreviewSection> {
-  bool _raw = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final parsed = parsePreview(widget.text);
-    final bulky = parsed != null && hasBulkText(parsed);
-    final readable = bulky && !_raw;
-    final shown = parsed == null
-        ? widget.text
-        : readable
-        ? readableValue(parsed)
-        : const JsonEncoder.withIndent('  ').convert(parsed);
-
-    return Padding(
-      padding: const EdgeInsets.only(top: 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(child: Text(widget.label)),
-              if (bulky)
-                TextButton(
-                  key: ValueKey('audit-raw-${widget.label}'),
-                  style: TextButton.styleFrom(
-                    visualDensity: VisualDensity.compact,
-                  ),
-                  onPressed: () => setState(() => _raw = !_raw),
-                  child: Text(readable ? 'Show raw JSON' : 'Show readable'),
-                ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          CodeBlock(shown, maxHeight: widget.maxHeight),
-          if (previewWasShortened(widget.text))
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text(
-                'Shortened to keep the audit log small. The full text is not '
-                'stored.',
-                key: const ValueKey('audit-shortened-note'),
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ),
-        ],
       ),
     );
   }
