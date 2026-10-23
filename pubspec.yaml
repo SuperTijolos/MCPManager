@@ -14,6 +14,8 @@ dependencies:
   # Gemma 4 (and any other model) through Ollama
   ollama_dart: ^4.0.0
   http: ^1.6.0
+  mcp_core:
+    path: packages/mcp_core
 
   go_router: ^18.1.0
   flutter_riverpod: ^3.4.3

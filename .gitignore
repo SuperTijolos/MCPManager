@@ -2,6 +2,9 @@
 *.env
 *.old
 
+# Libraries do not pin their dependencies
+packages/*/pubspec.lock
+
 # Miscellaneous
 *.class
 *.log
