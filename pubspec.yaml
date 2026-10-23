@@ -33,6 +33,10 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  # Runs the real gateway in-process so tests exercise the app against it.
+  mcp_portal_server:
+    path: server
+  shelf: ^1.4.2
   flutter_lints: ^6.0.0
 
 flutter:

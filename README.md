@@ -8,7 +8,8 @@ It is a Flutter web app built for the Hacktober Portimão festival, and a ground
 - **Inspect and test tools.** Read each tool's schema and run it from a test bench. Rules add shared arguments such as `reason` or `expected result` to many tools at once, and can hide or reshape what the Operator sees.
 - **Audit everything.** Every tool call, connection, sign-in and management action is recorded with the actor and how it was approved. Secrets are redacted, and the log can be filtered, paginated and inspected event by event.
 - **Operate with approvals.** Read-only tools run without asking. Anything else waits for your approval by default. Each chat has an **Ask first / Automatic** switch: in Automatic, its tool calls run without asking, including configuration changes.
-- **Run entirely in the browser.** There is no server of our own. Settings, servers and history stay in your browser's local storage, and backups move them between machines.
+- **Run in the browser.** The app has no backend: settings, servers and history stay in your browser's local storage, and backups move them between machines.
+- **Publish servers as portals.** An optional gateway (in `server/`) turns chosen servers into authenticated MCP endpoints that Claude, ChatGPT or any MCP client can use, with the same tool rules, access tokens, OAuth sign-in and an audit log of its own. See [Portals and the gateway](#portals-and-the-gateway).
 
 **Credits.** Made in collaboration with Tomás Rodrigues, [GuikiPT](https://github.com/GuikiPT) and [AjaxR0](https://github.com/AjaxR0). Their names and GitHub profiles are also listed on the MLH team page for the project.
 
@@ -19,10 +20,29 @@ It is a Flutter web app built for the Hacktober Portimão festival, and a ground
 | **Overview** | Servers online, tools, 24 h call volume per hour, error rate, latency (avg / p95), busiest tools, model reachability check. |
 | **MCP Servers** | Add/edit/remove MCP servers (Streamable HTTP or legacy HTTP+SSE, detected automatically), bearer token / OAuth and custom headers, live status, protocol, latency and a trace of what was tried. The Edit dialog is sectioned (connection, authentication, headers, advanced) and has a **Test connection** button. |
 | **MCP Tools** | Browse and search every tool, filter by read-only/may-modify/hidden status and connected server, inspect effective rules, read its schema, and run it from a test bench. The list and detail panes are separated by a draggable divider (double-click resets, ←/→ nudge). **Rules** reshape what the Operator sees (see below). |
-| **Operator** | Chat with the model. It can manage servers, find the right tool for a job, recover from failed calls, and run your servers' tools. Conversations are saved: a history panel lets you search, rename, delete and reopen older chats. |
-| **Audit** | Two views: **MCP tools** (tool calls) and **Dashboard** (connections, sign-ins and management actions), each with its own count and filters. Filter, search and paginate (page size selectable). Open any row for a detail dialog with the redacted arguments, the forwarded values, the result, the actor and the approval mode, or copy it as JSON. |
+| **Portals** | Publish chosen servers as MCP endpoints through the gateway: put servers on it, group them into portals, create access tokens, send your tool rules, and watch what clients call. |
+| **Chat** | Chat with the model. It can manage servers, find the right tool for a job, recover from failed calls, and run your servers' tools. Conversations are saved: a history panel lets you search, rename, delete and reopen older chats. |
+| **Audit** | Two views: **MCP tools** (tool calls) and **Activity** (connections, sign-ins and management actions), each with its own count and filters. Filter, search and paginate (page size selectable). Open any row for a detail dialog with the redacted arguments, the forwarded values, the result, the actor and the approval mode, or copy it as JSON. |
 | **Settings** | Model providers and enabled models (with presets for common endpoints), Operator limits and your own instructions, plus storage usage, backup / restore and a full reset. |
 | **About / Contributors** | What the app does, how the pieces fit, safety and data notes, facts about this copy (including the OAuth redirect URI), and the people who built it. |
+
+### Portals and the gateway
+
+A portal is one MCP endpoint (`https://your-host/mcp/<name>`) that publishes a set of your servers to other MCP clients. The browser app cannot serve an endpoint, so portals run on the **gateway**, a small Dart server in [`server/`](server/README.md): it holds the upstream servers you put on it, applies your tool rules, checks the caller (an access token, or OAuth sign-in for web connectors), forwards the call and records it. The **Portals** page is its control panel.
+
+```bash
+cd server && dart pub get && dart run bin/mcp_portal.dart   # prints the admin token once
+```
+
+Then open **Portals** in the app, connect with that address and token, put a server on the gateway, create a portal and an access token. The [gateway README](server/README.md) covers HTTPS, Docker, settings and the security model.
+
+### Repository layout
+
+| Folder | |
+|---|---|
+| `lib/`, `web/` | The Flutter web app. |
+| `packages/mcp_core/` | Flutter-free core shared by the app and the gateway: MCP models and clients, tool rules, redaction. |
+| `server/` | The portal gateway. |
 
 ### Tool rules
 

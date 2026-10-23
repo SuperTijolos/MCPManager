@@ -6,6 +6,7 @@ import 'pages/chat/chat_page.dart';
 import 'pages/contributors/contributors_page.dart';
 import 'pages/info/info_page.dart';
 import 'pages/overview/overview_page.dart';
+import 'pages/portals/portals_page.dart';
 import 'pages/servers/servers_page.dart';
 import 'pages/settings/settings_page.dart';
 import 'pages/tools/tool_focus.dart';
@@ -25,6 +26,7 @@ const mainDestinations = [
   AppDestination('/', 'Overview', Icons.dashboard_outlined, Icons.dashboard),
   AppDestination('/mcp-servers', 'MCP Servers', Icons.dns_outlined, Icons.dns),
   AppDestination('/mcp-tools', 'MCP Tools', Icons.build_outlined, Icons.build),
+  AppDestination('/portals', 'Portals', Icons.hub_outlined, Icons.hub),
   AppDestination('/chat', 'Chat', Icons.chat_bubble_outline, Icons.chat_bubble),
   AppDestination(
     '/audit',
@@ -77,6 +79,11 @@ GoRouter createRouter() => GoRouter(
           ),
         ),
         GoRoute(path: '/tools', redirect: (c, s) => '/mcp-tools'),
+        GoRoute(
+          path: '/portals',
+          name: 'Portals',
+          pageBuilder: (c, s) => _page(const PortalsPage(), s),
+        ),
         GoRoute(
           path: '/chat',
           name: 'Chat',

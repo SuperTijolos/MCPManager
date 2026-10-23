@@ -65,6 +65,17 @@ class InfoPage extends ConsumerWidget {
                   ),
                   tile(
                     _Feature(
+                      icon: Icons.hub_outlined,
+                      title: 'Portals',
+                      route: '/portals',
+                      body:
+                          'Publish chosen servers as authenticated MCP endpoints for Claude, ChatGPT or any MCP client. '
+                          'Portals run on the gateway, a small server you host: it applies your tool rules, checks access '
+                          'tokens or OAuth sign-ins, forwards each call and keeps its own audit log. This page manages it.',
+                    ),
+                  ),
+                  tile(
+                    _Feature(
                       icon: Icons.chat_bubble_outline,
                       title: 'Chat',
                       route: '/chat',

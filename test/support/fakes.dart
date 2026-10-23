@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -161,6 +162,7 @@ Future<ProviderContainer> makeContainer({
   http.Client? httpClient,
   OAuthPopup Function()? popupOpener,
   Map<String, Object> prefs = const {},
+  List<Override> overrides = const [],
 }) async {
   SharedPreferences.setMockInitialValues(prefs);
   final sp = await SharedPreferences.getInstance();
@@ -177,6 +179,7 @@ Future<ProviderContainer> makeContainer({
           () => httpClient ?? server!.client,
         ),
       if (llm != null) llmProviderFactoryProvider.overrideWithValue((_) => llm),
+      ...overrides,
     ],
   );
   return container;

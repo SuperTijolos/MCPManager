@@ -301,6 +301,20 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.7.0"
+  mcp_core:
+    dependency: "direct main"
+    description:
+      path: "packages/mcp_core"
+      relative: true
+    source: path
+    version: "1.0.0"
+  mcp_portal_server:
+    dependency: "direct dev"
+    description:
+      path: server
+      relative: true
+    source: path
+    version: "1.0.0"
   meta:
     dependency: transitive
     description:
@@ -437,6 +451,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.4.1"
+  shelf:
+    dependency: "direct dev"
+    description:
+      name: shelf
+      sha256: e75e9cf311d7fd712048038cc17c25199c38536c20330d53e7db058b543d5a48
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.4.3"
   sky_engine:
     dependency: transitive
     description: flutter
