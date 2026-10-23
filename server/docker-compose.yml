@@ -1,0 +1,25 @@
+# From this folder:  docker compose up -d --build
+services:
+  portal:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    restart: unless-stopped
+    ports:
+      # Loopback only: put HTTPS (a reverse proxy or a tunnel) in front of it.
+      - "127.0.0.1:8787:8787"
+    environment:
+      # The address clients use, once it is behind HTTPS.
+      PORTAL_PUBLIC_URL: ${PORTAL_PUBLIC_URL:-}
+      # Leave empty to have one generated and printed in the logs at first start.
+      PORTAL_ADMIN_TOKEN: ${PORTAL_ADMIN_TOKEN:-}
+      # Browser origins allowed to manage the gateway, besides localhost.
+      PORTAL_ALLOWED_ORIGINS: ${PORTAL_ALLOWED_ORIGINS:-}
+    volumes:
+      - portal-data:/data
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+volumes:
+  portal-data:

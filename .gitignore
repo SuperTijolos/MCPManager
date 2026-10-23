@@ -2,6 +2,9 @@
 *.env
 *.old
 
+# The gateway's state: upstream credentials, tokens and the audit log
+server/data/
+
 # Libraries do not pin their dependencies
 packages/*/pubspec.lock
 
