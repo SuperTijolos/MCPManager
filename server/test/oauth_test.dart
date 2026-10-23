@@ -370,7 +370,7 @@ void main() {
           ),
           'found',
         );
-        final event = gw.gateway.audit.recent().first;
+        final event = (await gw.gateway.audit.recent()).first;
         expect(event.principal, {'kind': 'oauth', 'id': id, 'name': 'Claude'});
       },
     );

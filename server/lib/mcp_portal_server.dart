@@ -4,6 +4,7 @@ library;
 export 'src/admin_api.dart' show slugify;
 export 'src/audit.dart' show GatewayAuditEvent, GatewayAuditLog;
 export 'src/config.dart';
+export 'src/events.dart' show EventBus, GatewayEvent;
 export 'src/mcp_endpoint.dart' show gatewayVersion, supportedProtocolVersions;
 export 'src/models.dart';
 export 'src/security.dart' show hashSecret, pkceS256;

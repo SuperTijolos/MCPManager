@@ -5,7 +5,9 @@ import 'package:mcp_core/mcp_core.dart';
 import 'package:shelf/shelf.dart';
 
 import 'access.dart';
+import 'login.dart';
 import 'models.dart';
+import 'pages.dart';
 import 'security.dart';
 import 'state.dart';
 
@@ -41,6 +43,7 @@ class OAuthServer {
     required this.auth,
     required this.baseUrl,
     required this.adminEnvToken,
+    required this.login,
     DateTime Function()? clock,
   }) : _now = clock ?? DateTime.now;
 
@@ -48,6 +51,7 @@ class OAuthServer {
   final PortalAuthenticator auth;
   final String Function(Request request) baseUrl;
   final String? adminEnvToken;
+  final LoginService login;
   final DateTime Function() _now;
 
   final _codes = <String, _Code>{}; // by code hash
@@ -232,14 +236,28 @@ class OAuthServer {
     final problems = <String>[];
     final checked = _checked(q, problems);
     if (checked == null) {
-      return _html(
+      return htmlResponse(
         400,
-        _page('Cannot sign in', '<p>${_esc(problems.join(' '))}</p>'),
+        htmlPage('Cannot sign in', '<p>${escapeHtml(problems.join(' '))}</p>'),
       );
     }
-    return _html(
+    final token = login.enabled ? login.sessionTokenFromCookie(request) : null;
+    final member = token == null ? null : login.memberForToken(token);
+    final here =
+        '/${request.url.path}${request.url.hasQuery ? '?${request.url.query}' : ''}';
+    return htmlResponse(
       200,
-      _consent(q, checked.client, checked.portalId, null),
+      _consent(
+        q,
+        checked.client,
+        checked.portalId,
+        null,
+        member: member,
+        csrf: member == null ? null : login.csrfFor(token!),
+        signInUrl: login.enabled && member == null
+            ? '/auth/github?return_to=${Uri.encodeQueryComponent(here)}'
+            : null,
+      ),
       redirect: checked.redirectUri,
     );
   }
@@ -249,9 +267,9 @@ class OAuthServer {
     final problems = <String>[];
     final checked = _checked(form, problems);
     if (checked == null) {
-      return _html(
+      return htmlResponse(
         400,
-        _page('Cannot sign in', '<p>${_esc(problems.join(' '))}</p>'),
+        htmlPage('Cannot sign in', '<p>${escapeHtml(problems.join(' '))}</p>'),
       );
     }
 
@@ -267,9 +285,20 @@ class OAuthServer {
 
     if (form['decision'] == 'deny') return redirect({'error': 'access_denied'});
 
+    // Signed in with GitHub: the page carries a value only that browser has.
+    final sessionToken = login.enabled
+        ? login.sessionTokenFromCookie(request)
+        : null;
+    final member = sessionToken == null
+        ? null
+        : login.memberForToken(sessionToken);
+    final signedIn =
+        member != null &&
+        form['csrf'] != null &&
+        constantTimeEquals(form['csrf']!, login.csrfFor(sessionToken!));
     final who = _caller(request);
-    if (_blocked(who)) {
-      return _html(
+    if (!signedIn && _blocked(who)) {
+      return htmlResponse(
         429,
         _consent(
           form,
@@ -281,10 +310,11 @@ class OAuthServer {
       );
     }
     final given = form['password'] ?? '';
-    final ok = auth.isAdmin('Bearer $given', envToken: adminEnvToken);
+    final ok =
+        signedIn || auth.isAdmin('Bearer $given', envToken: adminEnvToken);
     if (!ok) {
       _failures.putIfAbsent(who, () => []).add(_now());
-      return _html(
+      return htmlResponse(
         401,
         _consent(
           form,
@@ -331,8 +361,11 @@ class OAuthServer {
     Map<String, String> q,
     OAuthClient client,
     String? portalId,
-    String? error,
-  ) {
+    String? error, {
+    Member? member,
+    String? csrf,
+    String? signInUrl,
+  }) {
     final portal = portalId == null ? null : store.state.portal(portalId);
     final host = Uri.parse(q['redirect_uri']!).host;
     final hidden = [
@@ -347,15 +380,15 @@ class OAuthServer {
         'resource',
       ])
         if (q[k] != null)
-          '<input type="hidden" name="$k" value="${_esc(q[k]!)}">',
+          '<input type="hidden" name="$k" value="${escapeHtml(q[k]!)}">',
     ].join();
-    return _page('Connect ${_esc(client.clientName)}', '''
-<p><strong>${_esc(client.clientName)}</strong>${host.isEmpty ? '' : ' (${_esc(host)})'} wants to use
-${portal == null ? 'the tools of this gateway' : 'the portal <strong>${_esc(portal.name)}</strong>'}.</p>
-${error == null ? '' : '<p class="error">${_esc(error)}</p>'}
+    return htmlPage('Connect ${escapeHtml(client.clientName)}', '''
+<p><strong>${escapeHtml(client.clientName)}</strong>${host.isEmpty ? '' : ' (${escapeHtml(host)})'} wants to use
+${portal == null ? 'the tools of this gateway' : 'the portal <strong>${escapeHtml(portal.name)}</strong>'}.</p>
+${error == null ? '' : '<p class="error">${escapeHtml(error)}</p>'}
 <form method="post" action="/oauth/authorize">
 $hidden
-<label>Admin token<input type="password" name="password" autocomplete="current-password" autofocus required></label>
+${member != null ? '<p class="hint">Signed in as <strong>${escapeHtml(member.login)}</strong>.</p><input type="hidden" name="csrf" value="${escapeHtml(csrf ?? '')}">' : '${signInUrl == null ? '' : '<p><a class="button" href="${escapeHtml(signInUrl)}">Sign in with GitHub</a></p><p class="hint">or use the admin token:</p>'}<label>Admin token<input type="password" name="password" autocomplete="current-password" ${signInUrl == null ? 'autofocus ' : ''}required></label>'}
 <div class="row">
 <button type="submit" name="decision" value="allow">Allow</button>
 <button type="submit" name="decision" value="deny" class="secondary" formnovalidate>Deny</button>
@@ -494,49 +527,3 @@ Response _json(int status, Object body) => Response(
   body: jsonEncode(body),
   headers: {'content-type': 'application/json'},
 );
-
-/// A page for the browser. [redirect] is where the form will end up sending
-/// the user, so the policy can allow exactly that destination and no other.
-Response _html(int status, String body, {String? redirect}) {
-  var allowed = "'self'";
-  final uri = redirect == null ? null : Uri.tryParse(redirect);
-  if (uri != null && uri.hasScheme) {
-    final web = uri.scheme == 'https' || uri.scheme == 'http';
-    allowed += web ? ' ${uri.origin}' : ' ${uri.scheme}:';
-  }
-  return Response(
-    status,
-    body: body,
-    headers: {
-      'content-type': 'text/html; charset=utf-8',
-      'cache-control': 'no-store',
-      'x-frame-options': 'DENY',
-      'content-security-policy':
-          "default-src 'none'; style-src 'unsafe-inline'; form-action $allowed; frame-ancestors 'none'",
-      'referrer-policy': 'no-referrer',
-    },
-  );
-}
-
-String _esc(String s) => s
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
-
-String _page(String title, String body) =>
-    '''<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>$title</title>
-<style>
-body{font:16px/1.5 system-ui,sans-serif;background:#0f1419;color:#e6edf3;margin:0;display:grid;place-items:center;min-height:100vh}
-main{max-width:420px;width:100%;padding:28px;background:#1a212a;border-radius:14px;margin:16px}
-h1{font-size:20px;margin:0 0 12px}
-label{display:block;margin:16px 0 8px;font-size:14px;color:#9fb0c0}
-input{width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid #33404d;background:#0f1419;color:inherit;font-size:16px}
-.row{display:flex;gap:10px;margin-top:18px}
-button{flex:1;padding:10px;border:0;border-radius:8px;background:#5fd4c4;color:#04201b;font-size:16px;font-weight:600;cursor:pointer}
-button.secondary{background:#2a3541;color:#e6edf3}
-.error{color:#ff8a80}.hint{font-size:13px;color:#8a99a8;margin-top:18px}
-</style></head><body><main><h1>$title</h1>$body</main></body></html>''';

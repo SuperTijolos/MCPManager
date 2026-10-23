@@ -1,8 +1,9 @@
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:http/http.dart' as http;
 import 'package:mcp_portal_server/mcp_portal_server.dart';
+
+import 'fake_github.dart';
 
 const adminToken = 'admin-token-for-tests-1234';
 
@@ -18,25 +19,40 @@ class Harness {
   final client = http.Client();
 
   /// Starts a gateway on a free port. Everything stays in memory unless
-  /// [dataDir] is given.
+  /// [databaseUrl] is given (see [TestDatabase]).
   static Future<Harness> start({
-    String? dataDir,
+    String? databaseUrl,
     String? token = adminToken,
     List<String> allowedOrigins = const [],
     String? publicUrl,
+    FakeGitHub? github,
+    List<String> githubOrgs = const [],
+    List<String> githubUsers = const [],
+    Duration? eventHeartbeat,
+    Duration healthInterval = Duration.zero,
+    int maxChatsPerOwner = 200,
   }) async {
     final clock = Clock();
     final gateway = await GatewayServer.create(
       GatewayConfig(
         host: '127.0.0.1',
         port: 0,
-        dataDir: dataDir ?? 'unused',
+        databaseUrl: databaseUrl,
         adminToken: token,
         allowedOrigins: allowedOrigins,
         publicBaseUrl: publicUrl,
+        githubClientId: github == null ? null : 'gh-client',
+        githubClientSecret: github == null ? null : 'gh-secret',
+        githubOrgs: githubOrgs,
+        githubUsers: githubUsers,
+        eventHeartbeat: eventHeartbeat ?? const Duration(seconds: 25),
+        healthInterval: healthInterval,
+        maxChatsPerOwner: maxChatsPerOwner,
+        githubUrl: github?.url ?? 'https://github.com',
+        githubApiUrl: github?.url ?? 'https://api.github.com',
       ),
       clock: clock.call,
-      inMemory: dataDir == null,
+      inMemory: databaseUrl == null,
     );
     final server = await gateway.start();
     return Harness._(gateway, 'http://127.0.0.1:${server.port}', clock);
@@ -48,6 +64,17 @@ class Harness {
   }
 
   // ---------------------------------------------------------------- helpers
+
+  /// A GET that does not follow redirects.
+  Future<http.Response> rawGet(
+    String path, [
+    Map<String, String>? headers,
+  ]) async {
+    final request = http.Request('GET', Uri.parse('$base$path'))
+      ..followRedirects = false
+      ..headers.addAll(headers ?? {});
+    return http.Response.fromStream(await client.send(request));
+  }
 
   Map<String, String> adminHeaders([String token = adminToken]) => {
     'authorization': 'Bearer $token',
@@ -195,9 +222,6 @@ class Clock {
   DateTime call() => _now;
   void advance(Duration d) => _now = _now.add(d);
 }
-
-Future<Directory> tempDir() =>
-    Directory.systemTemp.createTemp('mcp_portal_test');
 
 /// A bare request, for the cases the helpers above do not cover.
 http.Request rawRequest(

@@ -5,10 +5,10 @@ import 'package:mcp_core/mcp_core.dart';
 import 'package:shelf/shelf.dart';
 
 import 'access.dart';
-import 'audit.dart';
 import 'catalog.dart';
 import 'models.dart';
 import 'state.dart';
+import 'tool_caller.dart';
 import 'upstream.dart';
 
 const gatewayVersion = '1.0.0';
@@ -27,19 +27,17 @@ class McpEndpoint {
     required this.store,
     required this.pool,
     required this.auth,
-    required this.audit,
+    required this.caller,
     required this.baseUrl,
-    DateTime Function()? clock,
-  }) : _now = clock ?? DateTime.now;
+  });
 
   final StateStore store;
   final UpstreamPool pool;
   final PortalAuthenticator auth;
-  final GatewayAuditLog audit;
+  final ToolCaller caller;
 
   /// The public origin for this request, for the OAuth discovery pointer.
   final String Function(Request request) baseUrl;
-  final DateTime Function() _now;
 
   Future<Response> handle(Request request, String slug) async {
     final portal = store.state.portalBySlug(slug);
@@ -181,11 +179,10 @@ class McpEndpoint {
     final catalog = await buildCatalog(portal, store.state, pool);
     final exposed = catalog.find(name);
     if (exposed == null) {
-      await _record(
-        portal,
-        who,
-        'denied',
-        tool: null,
+      await caller.record(
+        status: 'denied',
+        who: who,
+        portal: portal,
         exposedName: name,
         args: args,
         error: 'Tool is not available in this portal',
@@ -193,108 +190,31 @@ class McpEndpoint {
       return _rpcError(id, -32602, 'Unknown tool: $name');
     }
 
-    final prepared = prepareCall(exposed.effective, args);
-    if (prepared.error != null) {
-      await _record(
-        portal,
-        who,
-        'error',
-        exposed: exposed,
-        args: args,
-        error: 'Rejected before forwarding: ${prepared.error}',
-      );
-      return _rpcResult(id, _errorResult(prepared.error!));
+    final outcome = await caller.run(
+      server: exposed.server,
+      toolName: exposed.tool.name,
+      effective: exposed.effective,
+      args: args,
+      who: who,
+      portal: portal,
+      exposedName: exposed.exposedName,
+    );
+    final rejected = outcome.rejected;
+    if (rejected != null) return _rpcResult(id, _errorResult(rejected));
+    final failure = outcome.upstreamError;
+    if (failure != null) {
+      return _rpcResult(id, _errorResult('Upstream error: $failure'));
     }
-
-    final watch = Stopwatch()..start();
-    try {
-      final result = await pool.call(
-        exposed.server,
-        exposed.tool.name,
-        prepared.forwarded,
-      );
-      watch.stop();
-      await _record(
-        portal,
-        who,
-        result.isError ? 'error' : 'success',
-        exposed: exposed,
-        args: args,
-        forwarded: prepared.forwarded,
-        context: prepared.context,
-        result: result.text,
-        error: result.isError ? result.text : null,
-        durationMs: watch.elapsedMilliseconds,
-      );
-      return _rpcResult(
-        id,
-        result.raw ??
-            {
-              'content': [
-                {'type': 'text', 'text': result.text},
-              ],
-              if (result.isError) 'isError': true,
-            },
-      );
-    } catch (e) {
-      watch.stop();
-      final message = e is McpException ? e.message : '$e';
-      await _record(
-        portal,
-        who,
-        'error',
-        exposed: exposed,
-        args: args,
-        forwarded: prepared.forwarded,
-        context: prepared.context,
-        error: message,
-        durationMs: watch.elapsedMilliseconds,
-      );
-      return _rpcResult(id, _errorResult('Upstream error: $message'));
-    }
-  }
-
-  Future<void> _record(
-    Portal portal,
-    Principal who,
-    String status, {
-    ExposedTool? exposed,
-    String? tool,
-    String? exposedName,
-    required Json args,
-    Json? forwarded,
-    Json? context,
-    String? result,
-    String? error,
-    int? durationMs,
-  }) {
-    final argsPreview = redactedPreview(args);
-    final forwardedPreview =
-        forwarded != null && jsonEncode(forwarded) != jsonEncode(args)
-        ? redactedPreview(forwarded)
-        : null;
-    return audit.record(
-      GatewayAuditEvent(
-        id: newId('evt'),
-        timestamp: _now(),
-        portalId: portal.id,
-        portalSlug: portal.slug,
-        principal: who.toJson(),
-        status: status,
-        serverId: exposed?.server.id,
-        serverName: exposed?.server.name,
-        tool: exposed?.tool.name ?? tool,
-        exposedName: exposed?.exposedName ?? exposedName,
-        durationMs: durationMs,
-        args: argsPreview,
-        forwarded: forwardedPreview,
-        context: context == null || context.isEmpty
-            ? null
-            : redactedPreview(context),
-        result: result == null ? null : redactedPreview(result),
-        error: error == null ? null : redactText(error),
-        rules: exposed?.effective.rules ?? const [],
-      ),
+    final result = outcome.result!;
+    return _rpcResult(
+      id,
+      result.raw ??
+          {
+            'content': [
+              {'type': 'text', 'text': result.text},
+            ],
+            if (result.isError) 'isError': true,
+          },
     );
   }
 }

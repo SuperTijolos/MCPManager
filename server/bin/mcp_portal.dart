@@ -11,6 +11,9 @@ Future<void> main(List<String> args) async {
   } on ArgumentError catch (e) {
     stderr.writeln('Cannot start: ${e.message}');
     exit(64);
+  } on Object catch (e) {
+    stderr.writeln('Cannot start: $e');
+    exit(69);
   }
   final server = await gateway.start();
 
@@ -18,7 +21,7 @@ Future<void> main(List<String> args) async {
       config.publicBaseUrl ?? 'http://${server.address.host}:${server.port}';
   stdout
     ..writeln('MCP portal gateway $gatewayVersion listening on $base')
-    ..writeln('Data directory: ${Directory(config.dataDir).absolute.path}');
+    ..writeln('Database connected, migrations applied.');
   final token = gateway.generatedAdminToken;
   if (token != null) {
     stdout

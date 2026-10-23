@@ -1,25 +1,48 @@
 # From this folder:  docker compose up -d --build
 services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mcp
+      POSTGRES_DB: mcp
+      # Change it, or set POSTGRES_PASSWORD in your environment or a .env file.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mcp -d mcp"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   portal:
     build:
       context: ..
       dockerfile: server/Dockerfile
     restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
     ports:
       # Loopback only: put HTTPS (a reverse proxy or a tunnel) in front of it.
       - "127.0.0.1:8787:8787"
     environment:
+      DATABASE_URL: postgresql://mcp:${POSTGRES_PASSWORD:-change-me}@db:5432/mcp?sslmode=disable
       # The address clients use, once it is behind HTTPS.
       PORTAL_PUBLIC_URL: ${PORTAL_PUBLIC_URL:-}
       # Leave empty to have one generated and printed in the logs at first start.
       PORTAL_ADMIN_TOKEN: ${PORTAL_ADMIN_TOKEN:-}
+      # Sign in to the dashboard with GitHub (see README): an OAuth app, and who may.
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      DASHBOARD_GITHUB_ORGS: ${DASHBOARD_GITHUB_ORGS:-}
+      DASHBOARD_GITHUB_USERS: ${DASHBOARD_GITHUB_USERS:-}
       # Browser origins allowed to manage the gateway, besides localhost.
       PORTAL_ALLOWED_ORIGINS: ${PORTAL_ALLOWED_ORIGINS:-}
-    volumes:
-      - portal-data:/data
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
 
 volumes:
-  portal-data:
+  db-data:

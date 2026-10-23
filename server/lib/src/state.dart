@@ -1,7 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
-
 import 'package:mcp_core/mcp_core.dart';
 
 import 'models.dart';
@@ -17,13 +15,21 @@ class PortalState {
     Map<String, ToolOverride>? overrides,
     List<OAuthClient>? oauthClients,
     List<OAuthGrant>? oauthGrants,
+    List<Member>? members,
+    List<DashSession>? sessions,
+    Map<String, OAuthSession>? upstreamOAuth,
+    List<LlmProviderConfig>? llmProviders,
   }) : servers = servers ?? [],
        portals = portals ?? [],
        tokens = tokens ?? [],
        rules = rules ?? [],
        overrides = overrides ?? {},
        oauthClients = oauthClients ?? [],
-       oauthGrants = oauthGrants ?? [];
+       oauthGrants = oauthGrants ?? [],
+       members = members ?? [],
+       sessions = sessions ?? [],
+       upstreamOAuth = upstreamOAuth ?? {},
+       llmProviders = llmProviders ?? [];
 
   /// Set when the admin token was generated at first start.
   String? adminTokenHash;
@@ -36,6 +42,15 @@ class PortalState {
   Map<String, ToolOverride> overrides;
   final List<OAuthClient> oauthClients;
   final List<OAuthGrant> oauthGrants;
+  final List<Member> members;
+  final List<DashSession> sessions;
+
+  /// Per upstream server: the OAuth client the gateway registered there and
+  /// the tokens it holds. Secrets.
+  final Map<String, OAuthSession> upstreamOAuth;
+
+  /// Language-model endpoints for the dashboard's chat (keys are secrets).
+  final List<LlmProviderConfig> llmProviders;
 
   UpstreamServer? server(String id) =>
       servers.where((s) => s.id == id).firstOrNull;
@@ -53,6 +68,12 @@ class PortalState {
     'overrides': {for (final e in overrides.entries) e.key: e.value.toJson()},
     'oauthClients': [for (final c in oauthClients) c.toJson()],
     'oauthGrants': [for (final g in oauthGrants) g.toJson()],
+    'members': [for (final m in members) m.toJson()],
+    'sessions': [for (final x in sessions) x.toJson()],
+    'llmProviders': [for (final p in llmProviders) p.toJson()],
+    'upstreamOAuth': {
+      for (final e in upstreamOAuth.entries) e.key: e.value.toJson(),
+    },
   };
 
   factory PortalState.fromJson(Json json) {
@@ -74,67 +95,86 @@ class PortalState {
       },
       oauthClients: list('oauthClients', OAuthClient.fromJson),
       oauthGrants: list('oauthGrants', OAuthGrant.fromJson),
+      members: list('members', Member.fromJson),
+      sessions: list('sessions', DashSession.fromJson),
+      llmProviders: list('llmProviders', LlmProviderConfig.fromJson),
+      upstreamOAuth: {
+        for (final e in ((json['upstreamOAuth'] as Map?) ?? const {}).entries)
+          '${e.key}': OAuthSession.fromJson(
+            (e.value as Map).cast<String, dynamic>(),
+          ),
+      },
     );
   }
 }
 
-/// Holds the [PortalState] in memory and saves it after every change. Writes
-/// go to a temporary file first, so a crash never leaves half a document.
-class StateStore {
-  StateStore._(this._file, this.state);
+/// Where the state lives between runs.
+abstract class StatePersistence {
+  Future<PortalState> load();
 
-  /// A store that never touches the disk, for tests.
+  /// Writes what changed since the last [load] or [save].
+  Future<void> save(PortalState state);
+}
+
+/// Holds the [PortalState] in memory and writes it through [StatePersistence]
+/// after every change. Changes run one after another. If a write fails the
+/// change stays in memory and the next successful write carries it over.
+class StateStore {
+  StateStore._(this._persistence, this.state);
+
+  /// A store that never touches a database, for tests.
   StateStore.memory([PortalState? state])
-    : _file = null,
+    : _persistence = null,
       state = state ?? PortalState();
 
-  final File? _file;
+  final StatePersistence? _persistence;
   final PortalState state;
   Future<void> _queue = Future.value();
 
-  static Future<StateStore> open(File file) async {
-    var state = PortalState();
-    if (await file.exists()) {
-      final text = await file.readAsString();
-      if (text.trim().isNotEmpty) {
-        state = PortalState.fromJson(
-          (jsonDecode(text) as Map).cast<String, dynamic>(),
-        );
-      }
-    } else {
-      await file.parent.create(recursive: true);
-    }
-    return StateStore._(file, state);
+  /// Called after a change is saved, with the names of what changed (only
+  /// things the dashboard shows: not sessions or OAuth grants).
+  void Function(List<String> changed)? onChanged;
+
+  static const _watched = [
+    'servers',
+    'upstreamOAuth',
+    'llmProviders',
+    'portals',
+    'tokens',
+    'rules',
+    'overrides',
+    'members',
+  ];
+
+  Map<String, String> _snapshot() {
+    final json = state.toJson();
+    return {for (final k in _watched) k: jsonEncode(json[k])};
   }
 
-  /// Applies [change] and saves. Changes run one after another.
+  static Future<StateStore> open(StatePersistence persistence) async =>
+      StateStore._(persistence, await persistence.load());
+
+  /// Applies [change] and saves.
   Future<T> update<T>(T Function(PortalState state) change) {
     final result = Completer<T>();
     _queue = _queue.then((_) async {
       try {
+        final before = onChanged == null ? null : _snapshot();
         final value = change(state);
-        await _save();
+        await _persistence?.save(state);
+        if (before != null) {
+          final after = _snapshot();
+          final changed = [
+            for (final k in _watched)
+              if (before[k] != after[k]) k,
+          ];
+          if (changed.isNotEmpty) onChanged!(changed);
+        }
         result.complete(value);
       } catch (e, s) {
         result.completeError(e, s);
       }
     });
     return result.future;
-  }
-
-  Future<void> _save() async {
-    final file = _file;
-    if (file == null) return;
-    final temp = File('${file.path}.tmp');
-    await temp.writeAsString(jsonEncode(state.toJson()), flush: true);
-    // The state holds upstream credentials: keep it to the owner.
-    if (!Platform.isWindows) {
-      try {
-        await Process.run('chmod', ['600', temp.path]);
-      } on ProcessException {
-        // A minimal container has no chmod; the data directory is private anyway.
-      }
-    }
-    await temp.rename(file.path);
   }
 }

@@ -41,6 +41,9 @@ class UpstreamPool {
   final Duration catalogTtl;
   final DateTime Function() _now;
 
+  /// Supplies OAuth access tokens to servers that sign in that way.
+  Future<String?> Function(String serverId, {bool forceRefresh})? tokenSource;
+
   final _catalogs = <String, UpstreamCatalog>{};
   final _inflight = <String, Future<UpstreamCatalog>>{};
   final _connections = <String, _Live>{};
@@ -63,6 +66,9 @@ class UpstreamPool {
       _inflight.remove(server.id);
     });
   }
+
+  /// The last catalog fetched for [serverId], if any.
+  UpstreamCatalog? peek(String serverId) => _catalogs[serverId];
 
   Future<UpstreamCatalog> _discover(UpstreamServer server) async {
     try {
@@ -130,6 +136,10 @@ class UpstreamPool {
     final connection = createMcpConnection(
       server.toConfig(),
       httpClient: _clientFactory(),
+      tokenProvider: server.oauth
+          ? ({bool forceRefresh = false}) async =>
+                tokenSource?.call(server.id, forceRefresh: forceRefresh)
+          : null,
     );
     final info = await connection.connect();
     final live = _Live(connection, info, server.toConfigKey);
@@ -166,5 +176,5 @@ class _Live {
 
 extension on UpstreamServer {
   String get toConfigKey =>
-      '$url|$transport|${headers.entries.map((e) => '${e.key}=${e.value}').join('&')}';
+      '$url|$transport|$oauth|${headers.entries.map((e) => '${e.key}=${e.value}').join('&')}';
 }

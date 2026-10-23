@@ -1,23 +1,25 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:mcp_core/mcp_core.dart';
 import 'package:shelf/shelf.dart';
 
 import 'access.dart';
+import 'api_error.dart';
 import 'audit.dart';
 import 'catalog.dart';
+import 'chats.dart';
+import 'events.dart';
+import 'health.dart';
+import 'llm_api.dart';
+import 'login.dart';
 import 'mcp_endpoint.dart' show gatewayVersion;
 import 'models.dart';
 import 'security.dart';
 import 'state.dart';
+import 'tool_caller.dart';
+import 'upstream_oauth.dart';
 import 'upstream.dart';
-
-class ApiError implements Exception {
-  ApiError(this.status, this.code, [this.message]);
-  final int status;
-  final String code;
-  final String? message;
-}
 
 final _slugPattern = RegExp(r'^[a-z0-9][a-z0-9-]{0,62}$');
 
@@ -41,7 +43,17 @@ class AdminApi {
     required this.auth,
     required this.adminEnvToken,
     required this.baseUrl,
-  });
+    required this.login,
+    required this.bus,
+    required this.caller,
+    required this.health,
+    required this.upstreamOAuth,
+    required this.chats,
+    required this.llm,
+    this.maxChatsPerOwner = 200,
+    this.heartbeat = const Duration(seconds: 25),
+    DateTime Function()? clock,
+  }) : _now = clock ?? DateTime.now;
 
   final StateStore store;
   final UpstreamPool pool;
@@ -49,26 +61,48 @@ class AdminApi {
   final PortalAuthenticator auth;
   final String? adminEnvToken;
   final String Function(Request request) baseUrl;
+  final LoginService login;
+  final EventBus bus;
+  final ToolCaller caller;
+  final HealthMonitor health;
+  final UpstreamOAuth upstreamOAuth;
+  final ChatRepository chats;
+  final LlmApi llm;
+  final int maxChatsPerOwner;
+  final DateTime Function() _now;
+  final Duration heartbeat;
 
   /// Null when [request] is not for this API.
   Future<Response?> handle(Request request) async {
     final path = request.url.path;
     if (!path.startsWith('api/') && path != 'api') return null;
 
-    if (!auth.isAdmin(
-      request.headers['authorization'],
-      envToken: adminEnvToken,
-    )) {
+    final header = request.headers['authorization'];
+    final isAdmin = auth.isAdmin(header, envToken: adminEnvToken);
+    final member = isAdmin ? null : login.memberForToken(bearerToken(header));
+    if (!isAdmin && member == null) {
       return _json(401, {
         'error': 'unauthorized',
-        'message': 'The admin token is missing or wrong.',
+        'message': 'Sign in, or send the admin token.',
       });
     }
     try {
-      return await _route(
-        request,
-        path.substring(3).replaceAll(RegExp(r'^/|/$'), ''),
-      );
+      final route = path.substring(3).replaceAll(RegExp(r'^/|/$'), '');
+      if (route == 'me' && request.method == 'GET') {
+        return _json(200, {
+          'kind': isAdmin ? 'admin' : 'member',
+          if (member != null) 'member': member.toJson(),
+        });
+      }
+      if (route == 'logout' && request.method == 'POST') {
+        final token = bearerToken(header);
+        if (member != null && token != null) await login.signOut(token);
+        return Response(204);
+      }
+      final who = member != null
+          ? Principal(kind: 'member', id: member.id, name: member.login)
+          : const Principal(kind: 'admin', id: 'admin', name: 'Admin token');
+      return await _route(request.change(context: {'who': who}), route);
     } on ApiError catch (e) {
       return _json(e.status, {'error': e.code, 'message': ?e.message});
     } on FormatException catch (e) {
@@ -90,21 +124,91 @@ class AdminApi {
         return _portals(request, method, parts);
       case 'tokens':
         return _tokens(request, method, parts);
+      case 'llm':
+        return llm.handle(request, method, parts);
+      case 'chats':
+        return _chats(request, method, parts);
+      case 'tools' when method == 'GET' && parts.length == 1:
+        return _allTools(request);
+      case 'health' when parts.length <= 2:
+        return _health(request, method, parts);
+      case 'events' when method == 'GET' && parts.length == 1:
+        return _events();
+      case 'members':
+        return _members(request, method, parts);
       case 'rules' when parts.length == 1:
         return _rules(request, method);
       case 'audit' when method == 'GET' && parts.length == 1:
         final q = request.url.queryParameters;
+        final events = await audit.recent(
+          limit: (int.tryParse(q['limit'] ?? '') ?? 100).clamp(1, 1000),
+          portalId: q['portal'],
+          status: q['status'],
+          query: q['q'],
+          source: q['source'],
+          conversationId: q['conversation'],
+        );
         return _json(200, {
-          'events': [
-            for (final e in audit.recent(
-              limit: (int.tryParse(q['limit'] ?? '') ?? 100).clamp(1, 1000),
-              portalId: q['portal'],
-              status: q['status'],
-              query: q['q'],
-            ))
-              e.toJson(),
-          ],
+          'events': [for (final e in events) e.toJson()],
         });
+    }
+    throw ApiError(404, 'not_found');
+  }
+
+  /// A Server-Sent Events stream of what happens on the gateway. Nothing is
+  /// replayed: a client that reconnects reloads what it shows.
+  Response _events() {
+    late StreamController<List<int>> out;
+    StreamSubscription<GatewayEvent>? subscription;
+    Timer? timer;
+    var counter = 0;
+    out = StreamController<List<int>>(
+      onListen: () {
+        out.add(utf8.encode('retry: 3000\nevent: ready\ndata: {}\n\n'));
+        subscription = bus.stream.listen(
+          (e) => out.add(utf8.encode(e.encode(++counter))),
+        );
+        timer = Timer.periodic(
+          heartbeat,
+          (_) => out.add(utf8.encode(': keep-alive\n\n')),
+        );
+      },
+      onCancel: () {
+        subscription?.cancel();
+        timer?.cancel();
+      },
+    );
+    return Response.ok(
+      out.stream,
+      headers: {
+        'content-type': 'text/event-stream; charset=utf-8',
+        'cache-control': 'no-cache, no-transform',
+        'x-accel-buffering': 'no',
+      },
+      context: {'shelf.io.buffer_output': false},
+    );
+  }
+
+  Future<Response> _members(
+    Request request,
+    String method,
+    List<String> parts,
+  ) async {
+    final state = store.state;
+    if (parts.length == 1 && method == 'GET') {
+      return _json(200, [for (final m in state.members) m.toJson()]);
+    }
+    if (parts.length == 2 && method == 'DELETE') {
+      final id = Uri.decodeComponent(parts[1]);
+      if (state.members.every((m) => m.id != id)) {
+        throw ApiError(404, 'not_found');
+      }
+      // Their sessions go with them (the table cascades, the memory does not).
+      await store.update((s) {
+        s.sessions.removeWhere((x) => x.memberId == id);
+        s.members.removeWhere((m) => m.id == id);
+      });
+      return Response(204);
     }
     throw ApiError(404, 'not_found');
   }
@@ -158,6 +262,7 @@ class AdminApi {
         if (state.server(id) == null) throw ApiError(404, 'server_not_found');
         await store.update((s) {
           s.servers.removeWhere((x) => x.id == id);
+          s.upstreamOAuth.remove(id);
           for (var i = 0; i < s.portals.length; i++) {
             final p = s.portals[i];
             s.portals[i] = p.copyWith(
@@ -175,6 +280,7 @@ class AdminApi {
       final server =
           state.server(parts[1]) ?? (throw ApiError(404, 'server_not_found'));
       final catalog = await pool.catalog(server, refresh: true);
+      health.note(server, catalog);
       return _json(200, {
         'ok': catalog.ok,
         'error': catalog.error,
@@ -188,22 +294,334 @@ class AdminApi {
     } else if (parts.length == 3 && method == 'GET' && parts[2] == 'tools') {
       final server =
           state.server(parts[1]) ?? (throw ApiError(404, 'server_not_found'));
-      final catalog = await pool.catalog(server);
+      final catalog = await pool.catalog(
+        server,
+        refresh: request.url.queryParameters['refresh'] == '1',
+      );
+      return _json(200, _catalogJson(server, catalog));
+    } else if (parts.length == 3 && method == 'POST' && parts[2] == 'call') {
+      return _call(request, parts[1]);
+    } else if (parts.length >= 3 && parts[2] == 'oauth') {
+      return _upstreamOAuth(request, method, parts);
+    }
+    throw ApiError(405, 'method_not_allowed');
+  }
+
+  // ------------------------------------------------------------------ chats
+
+  static final _chatId = RegExp(r'^[A-Za-z0-9_-]{1,64}$');
+  static const _maxChatBytes = 16 * 1024 * 1024;
+
+  /// The signed-in member's conversations. Someone else's are invisible.
+  Future<Response> _chats(
+    Request request,
+    String method,
+    List<String> parts,
+  ) async {
+    final owner = (request.context['who'] as Principal).id;
+
+    if (parts.length == 1 && method == 'GET') {
+      final list = await chats.list(owner);
+      return _json(200, [for (final m in list) m.toJson()]);
+    }
+    if (parts.length != 2) throw ApiError(405, 'method_not_allowed');
+    final id = parts[1];
+    if (!_chatId.hasMatch(id)) {
+      throw ApiError(400, 'invalid_id', 'Use letters, numbers, - and _.');
+    }
+
+    if (method == 'GET') {
+      final doc = await chats.get(id);
+      if (doc == null || doc.meta.ownerId != owner) {
+        throw ApiError(404, 'chat_not_found');
+      }
       return _json(200, {
-        'error': catalog.error,
-        'tools': [
-          for (final t in catalog.tools)
-            {
-              'name': t.name,
-              'title': t.title,
-              'description': t.description,
-              'annotations': t.annotations,
-              'inputSchema': t.inputSchema,
-            },
-        ],
+        ...doc.meta.toJson(),
+        'items': doc.content.items,
+        'history': doc.content.history,
+      });
+    }
+    if (method == 'DELETE') {
+      if (!await chats.delete(id, owner)) throw ApiError(404, 'chat_not_found');
+      bus.emit('chat', {'id': id});
+      return Response(204);
+    }
+    if (method == 'PUT') {
+      final body = await _body(request, maxBytes: _maxChatBytes);
+      String? title;
+      if (body.containsKey('title')) {
+        final t = body['title'];
+        if (t is! String || t.trim().isEmpty || t.trim().length > 200) {
+          throw ApiError(
+            400,
+            'invalid_title',
+            'The title is 1-200 characters.',
+          );
+        }
+        title = t.trim();
+      }
+      final auto = body['autoApprove'];
+      if (auto != null && auto is! bool) {
+        throw ApiError(400, 'invalid_auto_approve');
+      }
+      List<Json>? objects(String key) {
+        if (!body.containsKey(key)) return null;
+        final v = body[key];
+        if (v is! List || v.any((e) => e is! Map)) {
+          throw ApiError(400, 'invalid_$key', '$key must be a list of objects');
+        }
+        return [for (final e in v) (e as Map).cast<String, dynamic>()];
+      }
+
+      final items = objects('items');
+      final history = objects('history');
+      if ((items == null) != (history == null)) {
+        throw ApiError(
+          400,
+          'invalid_content',
+          'Send items and history together.',
+        );
+      }
+      try {
+        final meta = await chats.save(
+          id,
+          owner,
+          _now(),
+          title: title,
+          autoApprove: auto as bool?,
+          content: items == null
+              ? null
+              : ChatContent(items: items, history: history!),
+        );
+        final dropped = await chats.prune(owner, maxChatsPerOwner);
+        for (final d in dropped) {
+          bus.emit('chat', {'id': d});
+        }
+        bus.emit('chat', {'id': id});
+        return _json(200, meta.toJson());
+      } on ChatOwnerMismatch {
+        // Same answer as for an id that does not exist: do not confirm it.
+        throw ApiError(404, 'chat_not_found');
+      }
+    }
+    throw ApiError(405, 'method_not_allowed');
+  }
+
+  /// Signing the gateway in to an upstream server that uses OAuth.
+  Future<Response> _upstreamOAuth(
+    Request request,
+    String method,
+    List<String> parts,
+  ) async {
+    final server =
+        store.state.server(parts[1]) ??
+        (throw ApiError(404, 'server_not_found'));
+    if (parts.length == 3 && method == 'GET') {
+      return _json(200, upstreamOAuth.status(server.id));
+    }
+    if (parts.length == 3 && method == 'DELETE') {
+      await upstreamOAuth.signOut(
+        server.id,
+        forget: request.url.queryParameters['forget'] == '1',
+      );
+      return _json(200, upstreamOAuth.status(server.id));
+    }
+    if (parts.length == 4 && parts[3] == 'start' && method == 'POST') {
+      final body = await _body(request);
+      String? returnTo;
+      if (body['returnTo'] != null) {
+        returnTo = login.safeReturn('${body['returnTo']}');
+        if (returnTo == null) {
+          throw ApiError(
+            400,
+            'invalid_return_to',
+            'That return address is not one this server knows.',
+          );
+        }
+      }
+      try {
+        final url = await upstreamOAuth.begin(
+          server,
+          redirectUri: '${baseUrl(request)}/oauth/upstream/callback',
+          returnTo: returnTo,
+        );
+        return _json(200, {'authorizeUrl': url.toString()});
+      } on OAuthException catch (e) {
+        throw ApiError(502, 'oauth_failed', e.message);
+      }
+    }
+    throw ApiError(405, 'method_not_allowed');
+  }
+
+  Json _catalogJson(UpstreamServer server, UpstreamCatalog catalog) => {
+    'id': server.id,
+    'name': server.name,
+    'error': catalog.error,
+    'fetchedAt': catalog.fetchedAt.toUtc().toIso8601String(),
+    'server': catalog.info == null
+        ? null
+        : {'name': catalog.info!.name, 'version': catalog.info!.version},
+    'transport': catalog.transport?.wire,
+    'tools': [
+      for (final t in catalog.tools)
+        {
+          'name': t.name,
+          'title': t.title,
+          'description': t.description,
+          'annotations': t.annotations,
+          'inputSchema': t.inputSchema,
+        },
+    ],
+  };
+
+  /// The tools of every enabled server, so the dashboard loads them in one go.
+  Future<Response> _allTools(Request request) async {
+    final refresh = request.url.queryParameters['refresh'] == '1';
+    final servers = [
+      for (final s in store.state.servers)
+        if (s.enabled) s,
+    ];
+    final catalogs = await Future.wait([
+      for (final s in servers) pool.catalog(s, refresh: refresh),
+    ]);
+    return _json(200, {
+      'servers': [
+        for (var i = 0; i < servers.length; i++)
+          _catalogJson(servers[i], catalogs[i]),
+      ],
+    });
+  }
+
+  Future<Response> _health(
+    Request request,
+    String method,
+    List<String> parts,
+  ) async {
+    if (parts.length == 1 && method == 'GET') {
+      return _json(200, {
+        'servers': {
+          for (final e in health.snapshot.entries) e.key: e.value.toJson(),
+        },
+      });
+    }
+    if (parts.length == 2 && parts[1] == 'check' && method == 'POST') {
+      await health.checkAll();
+      return _json(200, {
+        'servers': {
+          for (final e in health.snapshot.entries) e.key: e.value.toJson(),
+        },
       });
     }
     throw ApiError(405, 'method_not_allowed');
+  }
+
+  /// Calls a tool for the dashboard (its test bench or its chat). Rules apply
+  /// and the call is recorded, exactly as for a portal client.
+  Future<Response> _call(Request request, String serverId) async {
+    final server =
+        store.state.server(serverId) ??
+        (throw ApiError(404, 'server_not_found'));
+    final body = await _body(request);
+    final who = request.context['who'] as Principal;
+
+    final toolName = body['tool'];
+    if (toolName is! String || toolName.isEmpty) {
+      throw ApiError(400, 'invalid_tool', 'tool is required');
+    }
+    final source = body['source'] ?? 'dashboard';
+    if (source != 'dashboard' && source != 'chat') {
+      throw ApiError(400, 'invalid_source', 'source is dashboard or chat');
+    }
+    final rawArgs = body['arguments'] ?? const {};
+    if (rawArgs is! Map) {
+      throw ApiError(400, 'invalid_arguments', 'arguments must be an object');
+    }
+    final args = rawArgs.cast<String, dynamic>();
+    final conversationId = body['conversationId'] is String
+        ? body['conversationId'] as String
+        : null;
+    if (!server.enabled) throw ApiError(409, 'server_disabled');
+
+    final catalog = await pool.catalog(server);
+    final tool = catalog.tools.where((t) => t.name == toolName).firstOrNull;
+    if (tool == null && catalog.tools.isEmpty && catalog.error != null) {
+      await caller.record(
+        status: 'error',
+        who: who,
+        source: '$source',
+        server: server,
+        tool: toolName,
+        args: args,
+        error: catalog.error,
+        conversationId: conversationId,
+      );
+      throw ApiError(502, 'server_unreachable', catalog.error);
+    }
+    if (tool == null) {
+      await caller.record(
+        status: 'denied',
+        who: who,
+        source: '$source',
+        server: server,
+        tool: toolName,
+        args: args,
+        error: catalog.error ?? 'The server has no such tool',
+        conversationId: conversationId,
+      );
+      throw ApiError(
+        404,
+        'tool_not_found',
+        catalog.error ?? 'The server has no such tool',
+      );
+    }
+    final key = toolKey(server.id, tool.name);
+    final effective = computeEffective(
+      server.toConfig(),
+      tool,
+      store.state.rules,
+      store.state.overrides[key],
+    );
+    // Tools hidden from the Operator stay out of the chat's reach, whatever
+    // the dashboard asks for.
+    if (source == 'chat' && !effective.visible) {
+      await caller.record(
+        status: 'denied',
+        who: who,
+        source: 'chat',
+        server: server,
+        tool: tool.name,
+        args: args,
+        rules: effective.rules,
+        error: 'This tool is hidden from the Operator',
+        conversationId: conversationId,
+      );
+      throw ApiError(
+        403,
+        'tool_hidden',
+        'This tool is hidden from the Operator',
+      );
+    }
+
+    final outcome = await caller.run(
+      server: server,
+      toolName: tool.name,
+      effective: effective,
+      args: args,
+      who: who,
+      source: '$source',
+      conversationId: conversationId,
+    );
+    final result = outcome.result;
+    return _json(200, {
+      'status': outcome.status,
+      'isError': result?.isError ?? true,
+      'text': result?.text ?? outcome.rejected ?? outcome.upstreamError ?? '',
+      'structured': result?.structured,
+      'raw': result?.raw,
+      'rejected': outcome.rejected,
+      'error': outcome.upstreamError,
+      'durationMs': outcome.durationMs,
+    });
   }
 
   Future<Json> _saveServer(
@@ -260,8 +678,19 @@ class AdminApi {
           ? McpTransport.parse(body['transport'])
           : (existing?.transport ?? McpTransport.auto),
       enabled: body['enabled'] as bool? ?? existing?.enabled ?? true,
+      oauth: body['oauth'] as bool? ?? existing?.oauth ?? false,
+      oauthClientId: body.containsKey('oauthClientId')
+          ? _optionalText(body['oauthClientId'])
+          : existing?.oauthClientId,
+      oauthScope: body.containsKey('oauthScope')
+          ? _optionalText(body['oauthScope'])
+          : existing?.oauthScope,
     );
     await store.update((s) {
+      // Tokens belong to one address; a moved or non-OAuth server starts over.
+      if (existing != null && (existing.url != url || !server.oauth)) {
+        s.upstreamOAuth.remove(id);
+      }
       final i = s.servers.indexWhere((x) => x.id == id);
       if (i >= 0) {
         s.servers[i] = server;
@@ -271,6 +700,12 @@ class AdminApi {
     });
     await pool.invalidate(id);
     return server.toPublicJson();
+  }
+
+  String? _optionalText(Object? v) {
+    if (v == null) return null;
+    final t = '$v'.trim();
+    return t.isEmpty ? null : t;
   }
 
   String _freeServerSlug(String base, String id) {
@@ -529,8 +964,19 @@ class AdminApi {
     throw ApiError(405, 'method_not_allowed');
   }
 
-  Future<Json> _body(Request request) async {
-    final text = await request.readAsString();
+  Future<Json> _body(Request request, {int maxBytes = 1024 * 1024}) async {
+    final declared = request.contentLength;
+    if (declared != null && declared > maxBytes) {
+      throw ApiError(413, 'too_large', 'The request is too large.');
+    }
+    final bytes = <int>[];
+    await for (final chunk in request.read()) {
+      bytes.addAll(chunk);
+      if (bytes.length > maxBytes) {
+        throw ApiError(413, 'too_large', 'The request is too large.');
+      }
+    }
+    final text = utf8.decode(bytes);
     if (text.trim().isEmpty) return {};
     final decoded = jsonDecode(text);
     if (decoded is! Map) {

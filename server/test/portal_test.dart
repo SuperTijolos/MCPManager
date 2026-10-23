@@ -502,7 +502,7 @@ void main() {
           'path': '/a',
         }, reason: 'the reason stays here');
 
-        final event = gw.gateway.audit.recent().first;
+        final event = (await gw.gateway.audit.recent()).first;
         expect(event.context, contains('checking'));
         expect(event.rules, ['Why']);
       },
@@ -569,7 +569,7 @@ void main() {
         });
         expect(reply['result']['isError'], isTrue);
         expect(gw.textOf(reply), startsWith('Upstream error:'));
-        final event = gw.gateway.audit.recent().first;
+        final event = (await gw.gateway.audit.recent()).first;
         expect(event.status, 'error');
       },
     );

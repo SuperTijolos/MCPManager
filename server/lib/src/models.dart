@@ -11,6 +11,9 @@ class UpstreamServer {
     this.headers = const {},
     this.transport = McpTransport.auto,
     this.enabled = true,
+    this.oauth = false,
+    this.oauthClientId,
+    this.oauthScope,
   });
 
   final String id;
@@ -23,6 +26,14 @@ class UpstreamServer {
   final McpTransport transport;
   final bool enabled;
 
+  /// The server asks for an OAuth sign-in instead of a static token. The
+  /// gateway holds the tokens (see `UpstreamOAuth`).
+  final bool oauth;
+
+  /// A client id registered by hand, for servers without dynamic registration.
+  final String? oauthClientId;
+  final String? oauthScope;
+
   McpServerConfig toConfig() => McpServerConfig(
     id: id,
     name: name,
@@ -30,6 +41,9 @@ class UpstreamServer {
     headers: headers,
     enabled: enabled,
     transport: transport,
+    oauth: oauth,
+    oauthClientId: oauthClientId,
+    oauthScope: oauthScope,
   );
 
   UpstreamServer copyWith({
@@ -39,6 +53,7 @@ class UpstreamServer {
     Map<String, String>? headers,
     McpTransport? transport,
     bool? enabled,
+    bool? oauth,
   }) => UpstreamServer(
     id: id,
     name: name ?? this.name,
@@ -47,6 +62,9 @@ class UpstreamServer {
     headers: headers ?? this.headers,
     transport: transport ?? this.transport,
     enabled: enabled ?? this.enabled,
+    oauth: oauth ?? this.oauth,
+    oauthClientId: oauthClientId,
+    oauthScope: oauthScope,
   );
 
   Json toJson() => {
@@ -57,6 +75,9 @@ class UpstreamServer {
     'headers': headers,
     'transport': transport.wire,
     'enabled': enabled,
+    'oauth': oauth,
+    'oauthClientId': ?oauthClientId,
+    'oauthScope': ?oauthScope,
   };
 
   /// What an API client may see: header names, never their values.
@@ -68,6 +89,9 @@ class UpstreamServer {
     'headerNames': headers.keys.toList()..sort(),
     'transport': transport.wire,
     'enabled': enabled,
+    'oauth': oauth,
+    'oauthClientId': ?oauthClientId,
+    'oauthScope': ?oauthScope,
   };
 
   factory UpstreamServer.fromJson(Json json) => UpstreamServer(
@@ -81,6 +105,9 @@ class UpstreamServer {
     },
     transport: McpTransport.parse(json['transport']),
     enabled: json['enabled'] as bool? ?? true,
+    oauth: json['oauth'] as bool? ?? false,
+    oauthClientId: json['oauthClientId'] as String?,
+    oauthScope: json['oauthScope'] as String?,
   );
 }
 
@@ -322,5 +349,186 @@ class OAuthGrant {
     createdAt: DateTime.parse(json['createdAt'] as String),
     portalId: json['portalId'] as String?,
     revokedAt: _date(json['revokedAt']),
+  );
+}
+
+/// Someone allowed into the dashboard. Today they sign in with GitHub; the
+/// id is `<provider>:<provider id>` so other providers can follow.
+class Member {
+  const Member({
+    required this.id,
+    required this.login,
+    required this.createdAt,
+    this.name,
+    this.email,
+    this.avatarUrl,
+    this.orgs = const [],
+    this.role = 'admin',
+    this.lastSeenAt,
+  });
+
+  final String id;
+  final String login;
+  final String? name;
+  final String? email;
+  final String? avatarUrl;
+
+  /// The GitHub organisations they belonged to at their last sign-in.
+  final List<String> orgs;
+  final String role;
+  final DateTime createdAt;
+  final DateTime? lastSeenAt;
+
+  Member copyWith({
+    String? login,
+    String? name,
+    String? email,
+    String? avatarUrl,
+    List<String>? orgs,
+    DateTime? lastSeenAt,
+  }) => Member(
+    id: id,
+    login: login ?? this.login,
+    name: name ?? this.name,
+    email: email ?? this.email,
+    avatarUrl: avatarUrl ?? this.avatarUrl,
+    orgs: orgs ?? this.orgs,
+    role: role,
+    createdAt: createdAt,
+    lastSeenAt: lastSeenAt ?? this.lastSeenAt,
+  );
+
+  Json toJson() => {
+    'id': id,
+    'login': login,
+    'name': ?name,
+    'email': ?email,
+    'avatarUrl': ?avatarUrl,
+    'orgs': orgs,
+    'role': role,
+    'createdAt': createdAt.toUtc().toIso8601String(),
+    if (lastSeenAt != null) 'lastSeenAt': lastSeenAt!.toUtc().toIso8601String(),
+  };
+
+  factory Member.fromJson(Json json) => Member(
+    id: json['id'] as String,
+    login: json['login'] as String,
+    name: json['name'] as String?,
+    email: json['email'] as String?,
+    avatarUrl: json['avatarUrl'] as String?,
+    orgs: [for (final o in (json['orgs'] as List?) ?? const []) '$o'],
+    role: json['role'] as String? ?? 'admin',
+    createdAt: DateTime.parse(json['createdAt'] as String),
+    lastSeenAt: _date(json['lastSeenAt']),
+  );
+}
+
+/// A signed-in browser. Only the hash of its token is kept.
+class DashSession {
+  const DashSession({
+    required this.hash,
+    required this.memberId,
+    required this.createdAt,
+    required this.expiresAt,
+  });
+
+  final String hash;
+  final String memberId;
+  final DateTime createdAt;
+  final DateTime expiresAt;
+
+  Json toJson() => {
+    'hash': hash,
+    'memberId': memberId,
+    'createdAt': createdAt.toUtc().toIso8601String(),
+    'expiresAt': expiresAt.toUtc().toIso8601String(),
+  };
+
+  factory DashSession.fromJson(Json json) => DashSession(
+    hash: json['hash'] as String,
+    memberId: json['memberId'] as String,
+    createdAt: DateTime.parse(json['createdAt'] as String),
+    expiresAt: DateTime.parse(json['expiresAt'] as String),
+  );
+}
+
+/// A language-model endpoint the dashboard's chat uses. Its key is a secret:
+/// stored here, sent upstream by the proxy, never returned (see [toPublicJson]).
+class LlmProviderConfig {
+  const LlmProviderConfig({
+    required this.id,
+    required this.name,
+    required this.kind,
+    required this.baseUrl,
+    this.apiKey,
+    this.models = const [],
+    this.contextLength,
+  });
+
+  static const kinds = ['ollama', 'openaiCompatible'];
+
+  final String id;
+  final String name;
+
+  /// `ollama` or `openaiCompatible`.
+  final String kind;
+
+  /// Ollama: `http://host:11434`. OpenAI-compatible: `https://host/v1`.
+  final String baseUrl;
+  final String? apiKey;
+
+  /// Models enabled for the chat picker.
+  final List<String> models;
+  final int? contextLength;
+
+  LlmProviderConfig copyWith({
+    String? name,
+    String? kind,
+    String? baseUrl,
+    String? apiKey,
+    bool clearApiKey = false,
+    List<String>? models,
+    int? contextLength,
+    bool clearContextLength = false,
+  }) => LlmProviderConfig(
+    id: id,
+    name: name ?? this.name,
+    kind: kind ?? this.kind,
+    baseUrl: baseUrl ?? this.baseUrl,
+    apiKey: clearApiKey ? null : apiKey ?? this.apiKey,
+    models: models ?? this.models,
+    contextLength: clearContextLength
+        ? null
+        : contextLength ?? this.contextLength,
+  );
+
+  Json toJson() => {
+    'id': id,
+    'name': name,
+    'kind': kind,
+    'baseUrl': baseUrl,
+    'apiKey': ?apiKey,
+    'models': models,
+    'contextLength': ?contextLength,
+  };
+
+  Json toPublicJson() => {
+    'id': id,
+    'name': name,
+    'kind': kind,
+    'baseUrl': baseUrl,
+    'hasKey': (apiKey ?? '').isNotEmpty,
+    'models': models,
+    'contextLength': contextLength,
+  };
+
+  factory LlmProviderConfig.fromJson(Json json) => LlmProviderConfig(
+    id: json['id'] as String,
+    name: json['name'] as String,
+    kind: json['kind'] as String,
+    baseUrl: json['baseUrl'] as String,
+    apiKey: json['apiKey'] as String?,
+    models: [for (final m in (json['models'] as List?) ?? const []) '$m'],
+    contextLength: json['contextLength'] as int?,
   );
 }
