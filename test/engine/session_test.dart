@@ -18,6 +18,30 @@ class _Github extends http.BaseClient {
 }
 
 void main() {
+  group('guessing the server from where the dashboard is served', () {
+    test('a real host is the server too', () {
+      expect(
+        guessServerUrl(Uri.parse('https://mcp.example.com/#/sign-in')),
+        'https://mcp.example.com',
+      );
+      expect(
+        guessServerUrl(Uri.parse('http://100.100.1.10:8080/')),
+        'http://100.100.1.10:8080',
+      );
+    });
+
+    test('localhost, files and nothing give no guess', () {
+      for (final u in [
+        'http://localhost:9090/',
+        'http://127.0.0.1:8080/',
+        'http://app.localhost/',
+        'file:///tmp/index.html',
+      ]) {
+        expect(guessServerUrl(Uri.parse(u)), isNull, reason: u);
+      }
+    });
+  });
+
   late TestGateway gw;
 
   Future<ProviderContainer> start({

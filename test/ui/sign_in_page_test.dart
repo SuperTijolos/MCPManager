@@ -67,9 +67,54 @@ void main() {
   testWidgets('sign-in says when the server has none set up', (tester) async {
     await pumpApp(tester, signedIn: false);
     await tester.enterText(_key('server-url'), gatewayUrl);
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('no sign-in set up yet'),
+      findsOneWidget,
+      reason: 'said as soon as the server has been asked',
+    );
     await tester.tap(_key('sign-in-github'));
     await tester.pumpAndSettle();
-    expect(find.textContaining('no sign-in set up'), findsOneWidget);
+    expect(
+      find.text('This server has no sign-in set up. Use the admin token.'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('the address defaults to where the dashboard is served from', (
+    tester,
+  ) async {
+    await pumpApp(
+      tester,
+      signedIn: false,
+      overrides: [
+        sameOriginServerProvider.overrideWithValue('https://mcp.example.com'),
+      ],
+    );
+    expect(
+      tester.widget<TextField>(_key('server-url')).controller!.text,
+      'https://mcp.example.com',
+    );
+  });
+
+  testWidgets('a PORTAL_URL, then a saved address, win over that guess', (
+    tester,
+  ) async {
+    await pumpApp(
+      tester,
+      signedIn: false,
+      prefs: {
+        'mcpm.session.v1': jsonEncode({'url': 'https://saved.example'}),
+      },
+      overrides: [
+        sameOriginServerProvider.overrideWithValue('https://mcp.example.com'),
+      ],
+    );
+    expect(
+      tester.widget<TextField>(_key('server-url')).controller!.text,
+      'https://saved.example',
+    );
   });
 
   testWidgets('a session that ended says why', (tester) async {

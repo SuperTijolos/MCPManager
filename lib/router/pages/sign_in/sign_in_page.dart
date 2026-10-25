@@ -34,8 +34,16 @@ class _SignInPageState extends ConsumerState<SignInPage> {
     final session = ref.read(sessionProvider);
     final env = ref.read(appEnvProvider);
     _url = TextEditingController(
-      text: session.serverUrl ?? env.portalUrl ?? 'http://localhost:8787',
+      text:
+          session.serverUrl ??
+          env.portalUrl ??
+          ref.read(sameOriginServerProvider) ??
+          'http://localhost:8787',
     );
+    // Find out what this server offers, so the buttons are the right ones.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && session.status != SessionStatus.checking) _inspect();
+    });
   }
 
   @override

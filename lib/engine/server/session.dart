@@ -359,6 +359,32 @@ final oauthRedirectUriProvider = Provider<Uri>((ref) {
   return Uri.parse('$url/oauth/upstream/callback');
 });
 
+/// The server address to suggest on the sign-in page when none is saved and
+/// no `PORTAL_URL` is set: the address the dashboard itself was loaded from.
+/// That is right when one address serves both (behind a reverse proxy) and
+/// useless while developing, where the dashboard is on its own port, so
+/// localhost gets no guess.
+String? guessServerUrl(Uri app) {
+  if (app.scheme != 'http' && app.scheme != 'https') return null;
+  final host = app.host;
+  if (host.isEmpty ||
+      host == 'localhost' ||
+      host.endsWith('.localhost') ||
+      host == '127.0.0.1' ||
+      host == '::1') {
+    return null;
+  }
+  return Uri(
+    scheme: app.scheme,
+    host: host,
+    port: app.hasPort ? app.port : null,
+  ).toString();
+}
+
+final sameOriginServerProvider = Provider<String?>(
+  (ref) => guessServerUrl(currentAppUri()),
+);
+
 /// The address this dashboard is served from, for links that send people
 /// back to it. Null when it is not a web address (tests).
 final dashboardAddressProvider = Provider<String?>((ref) {

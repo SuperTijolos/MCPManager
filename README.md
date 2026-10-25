@@ -76,7 +76,7 @@ flutter pub get
 flutter run -d chrome
 ```
 
-The dashboard opens on a sign-in page: enter the server's address (set `PORTAL_URL` in `.env` to prefill it) and sign in with **GitHub** or **Google**, or use the admin token while none is set up. Set providers up under **Settings → Sign-in** (details in the [server README](server/README.md#signing-in-github-and-google)). Allow the dashboard's address in the server (`PORTAL_ALLOWED_ORIGINS`, `localhost` is always allowed) and set each OAuth app's callback to the *server's* `/auth/<provider>/callback`.
+The dashboard opens on a sign-in page with the server's address already filled in: `PORTAL_URL` from `.env` if set, otherwise the address the dashboard itself is served from (right when one host serves both, as behind a reverse proxy; localhost gets no guess). Sign in with **GitHub** or **Google**, or use the admin token while none is set up. Set providers up under **Settings → Sign-in** (details in the [server README](server/README.md#signing-in-github-and-google)). Allow the dashboard's address in the server (`PORTAL_ALLOWED_ORIGINS`, `localhost` is always allowed) and set each OAuth app's callback to the *server's* `/auth/<provider>/callback`.
 
 ### Sharing with another machine (Tailscale / LAN)
 
