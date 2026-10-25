@@ -13,6 +13,8 @@ class UpstreamCatalog {
     this.tools = const [],
     this.error,
     this.transport,
+    this.endpoint,
+    this.trace = const [],
   });
 
   final DateTime fetchedAt;
@@ -23,7 +25,40 @@ class UpstreamCatalog {
   final String? error;
   final McpTransport? transport;
 
+  /// The address that answered (a bare host may resolve to `/mcp` or `/sse`).
+  final String? endpoint;
+
+  /// What was tried and how each step went, for diagnosing a failure.
+  final List<String> trace;
+
   bool get ok => error == null;
+}
+
+/// What a trial connection found, without saving anything.
+class ProbeOutcome {
+  const ProbeOutcome({
+    this.connected = false,
+    this.needsAuth = false,
+    this.error,
+    this.info,
+    this.toolCount = 0,
+    this.transport,
+    this.endpoint,
+    this.latencyMs,
+    this.trace = const [],
+  });
+
+  final bool connected;
+
+  /// The server answered but wants credentials.
+  final bool needsAuth;
+  final String? error;
+  final McpServerInfo? info;
+  final int toolCount;
+  final McpTransport? transport;
+  final String? endpoint;
+  final int? latencyMs;
+  final List<String> trace;
 }
 
 /// Talks to the upstream servers: lists their tools (cached for a short while)
@@ -40,6 +75,13 @@ class UpstreamPool {
   final http.Client Function() _clientFactory;
   final Duration catalogTtl;
   final DateTime Function() _now;
+
+  /// Told when connecting found a different transport or address than the
+  /// server is saved with, so it can be remembered.
+  void Function(UpstreamServer server, McpTransport transport, String endpoint)?
+  onResolved;
+
+  final _failureTraces = <String, List<String>>{};
 
   /// Supplies OAuth access tokens to servers that sign in that way.
   Future<String?> Function(String serverId, {bool forceRefresh})? tokenSource;
@@ -79,8 +121,18 @@ class UpstreamPool {
         info: live.info,
         tools: tools,
         transport: live.connection.transport,
+        endpoint: live.connection.endpointUrl,
+        trace: live.connection.trace,
       );
       _catalogs[server.id] = catalog;
+      if (live.connection.transport != server.transport ||
+          live.connection.endpointUrl != server.url) {
+        onResolved?.call(
+          server,
+          live.connection.transport,
+          live.connection.endpointUrl,
+        );
+      }
       return catalog;
     } catch (e) {
       await _drop(server.id);
@@ -88,15 +140,26 @@ class UpstreamPool {
       // one failed refresh; only a first failure has nothing to fall back on.
       final previous = _catalogs[server.id];
       if (previous != null && previous.ok) {
-        return UpstreamCatalog(
+        // One failed look keeps the last tools (a blip must not empty every
+        // portal), but is remembered as a failure: the next look tries again
+        // and a second failure drops them.
+        final stale = UpstreamCatalog(
           fetchedAt: previous.fetchedAt,
           info: previous.info,
           tools: previous.tools,
           transport: previous.transport,
+          endpoint: previous.endpoint,
+          trace: _failureTraces[server.id] ?? previous.trace,
           error: '$e',
         );
+        _catalogs[server.id] = stale;
+        return stale;
       }
-      final failed = UpstreamCatalog(fetchedAt: _now(), error: '$e');
+      final failed = UpstreamCatalog(
+        fetchedAt: _now(),
+        error: '$e',
+        trace: _failureTraces[server.id] ?? const [],
+      );
       _catalogs[server.id] = failed;
       return failed;
     }
@@ -141,7 +204,16 @@ class UpstreamPool {
                 tokenSource?.call(server.id, forceRefresh: forceRefresh)
           : null,
     );
-    final info = await connection.connect();
+    final McpServerInfo info;
+    try {
+      info = await connection.connect();
+    } catch (_) {
+      // Keep what was tried; the connection itself is thrown away.
+      _failureTraces[server.id] = List.of(connection.trace);
+      connection.close();
+      rethrow;
+    }
+    _failureTraces.remove(server.id);
     final live = _Live(connection, info, server.toConfigKey);
     _connections[server.id] = live;
     return live;
@@ -150,6 +222,50 @@ class UpstreamPool {
   Future<void> _drop(String id) async {
     final live = _connections.remove(id);
     live?.connection.close();
+  }
+
+  /// Tries [server] once and throws the connection away. [signedInAs] lets an
+  /// OAuth server reuse the sign-in the gateway already holds for that id.
+  Future<ProbeOutcome> probe(
+    UpstreamServer server, {
+    String? signedInAs,
+  }) async {
+    final connection = createMcpConnection(
+      server.toConfig(),
+      httpClient: _clientFactory(),
+      tokenProvider: server.oauth && signedInAs != null
+          ? ({bool forceRefresh = false}) async =>
+                tokenSource?.call(signedInAs, forceRefresh: forceRefresh)
+          : null,
+    );
+    final watch = Stopwatch()..start();
+    try {
+      final info = await connection.connect();
+      final tools = await connection.listTools();
+      watch.stop();
+      return ProbeOutcome(
+        connected: true,
+        info: info,
+        toolCount: tools.length,
+        transport: connection.transport,
+        endpoint: connection.endpointUrl,
+        latencyMs: watch.elapsedMilliseconds,
+        trace: connection.trace,
+      );
+    } on McpAuthRequired catch (e) {
+      return ProbeOutcome(
+        needsAuth: true,
+        error: e.message,
+        endpoint: connection.endpointUrl,
+        trace: connection.trace,
+      );
+    } on McpException catch (e) {
+      return ProbeOutcome(error: e.message, trace: connection.trace);
+    } catch (e) {
+      return ProbeOutcome(error: '$e', trace: connection.trace);
+    } finally {
+      connection.close();
+    }
   }
 
   /// Forget everything about [serverId] (after it was edited or removed).

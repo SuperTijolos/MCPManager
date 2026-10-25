@@ -295,6 +295,7 @@ void main() {
           '20261026000000_upstream_oauth',
           '20261027000000_chats',
           '20261028000000_llm_providers',
+          '20261029000000_audit_kinds',
         ],
       );
     });
@@ -306,7 +307,7 @@ void main() {
       for (final gw in starts) {
         await gw.close();
       }
-      expect(await rows('select 1 from schema_migrations'), hasLength(6));
+      expect(await rows('select 1 from schema_migrations'), hasLength(7));
     });
 
     test('creates every table the server needs', () async {

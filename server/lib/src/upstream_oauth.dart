@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:mcp_core/mcp_core.dart';
 import 'package:shelf/shelf.dart';
 
+import 'audit.dart';
 import 'events.dart';
 import 'models.dart';
 import 'pages.dart';
@@ -42,6 +43,7 @@ class UpstreamOAuth {
   UpstreamOAuth({
     required this.store,
     required this.bus,
+    required this.audit,
     required this.onSessionChanged,
     http.Client Function()? httpClient,
     DateTime Function()? clock,
@@ -50,6 +52,7 @@ class UpstreamOAuth {
 
   final StateStore store;
   final EventBus bus;
+  final GatewayAuditLog audit;
 
   /// Called when tokens appear or disappear, so a held connection is replaced.
   final Future<void> Function(String serverId) onSessionChanged;
@@ -238,6 +241,8 @@ class UpstreamOAuth {
     });
     await onSessionChanged(serverId);
     bus.emit('oauth', {'serverId': serverId, 'signedIn': false});
+    final server = store.state.server(serverId);
+    if (server != null) await _record(server, 'success', result: 'Signed out');
   }
 
   Future<void> _put(String serverId, OAuthSession s) => store.update((st) {
@@ -268,6 +273,11 @@ class UpstreamOAuth {
       return _page(404, 'Cannot sign in', 'That server no longer exists.');
     }
     if (q['error'] != null) {
+      await _record(
+        server,
+        'error',
+        error: '${q['error_description'] ?? q['error']}',
+      );
       return _page(
         403,
         'Sign-in refused',
@@ -298,10 +308,12 @@ class UpstreamOAuth {
         ),
       );
     } on OAuthException catch (e) {
+      await _record(server, 'error', error: e.message);
       return _page(502, 'Cannot sign in', e.message);
     } finally {
       client.close();
     }
+    await _record(server, 'success', result: 'OAuth sign-in completed');
     await onSessionChanged(pending.serverId);
     bus.emit('oauth', {'serverId': pending.serverId, 'signedIn': true});
 
@@ -313,6 +325,24 @@ class UpstreamOAuth {
       '${server.name} is connected. You can close this window.',
     );
   }
+
+  Future<void> _record(
+    UpstreamServer server,
+    String status, {
+    String? result,
+    String? error,
+  }) => audit.record(
+    GatewayAuditEvent.system(
+      id: newId('evt'),
+      timestamp: _now(),
+      kind: 'authorize',
+      status: status,
+      serverId: server.id,
+      serverName: server.name,
+      result: result,
+      error: error == null ? null : redactText(error),
+    ),
+  );
 
   Response _page(int status, String title, String message) =>
       htmlResponse(status, htmlPage(title, '<p>${escapeHtml(message)}</p>'));

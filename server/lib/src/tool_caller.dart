@@ -15,6 +15,7 @@ class CallOutcome {
     this.rejected,
     this.upstreamError,
     this.durationMs,
+    this.event,
   });
 
   /// `success`, `error` or `denied`, as recorded.
@@ -30,6 +31,9 @@ class CallOutcome {
   /// Why the server could not be reached or failed outright.
   final String? upstreamError;
   final int? durationMs;
+
+  /// What was written to the audit log for this call.
+  final GatewayAuditEvent? event;
 }
 
 /// Applies the rules to a call, forwards it to the upstream server and writes
@@ -57,8 +61,10 @@ class ToolCaller {
     Portal? portal,
     String? exposedName,
     String? conversationId,
+    String? actor,
+    String? approval,
   }) async {
-    Future<void> record(
+    Future<GatewayAuditEvent> record(
       String status, {
       Json? forwarded,
       Json? context,
@@ -81,15 +87,21 @@ class ToolCaller {
       error: error,
       durationMs: durationMs,
       conversationId: conversationId,
+      actor: actor,
+      approval: approval,
     );
 
     final prepared = prepareCall(effective, args);
     if (prepared.error != null) {
-      await record(
+      final event = await record(
         'error',
         error: 'Rejected before forwarding: ${prepared.error}',
       );
-      return CallOutcome(status: 'error', rejected: prepared.error);
+      return CallOutcome(
+        status: 'error',
+        rejected: prepared.error,
+        event: event,
+      );
     }
 
     final watch = Stopwatch()..start();
@@ -97,7 +109,7 @@ class ToolCaller {
       final result = await pool.call(server, toolName, prepared.forwarded);
       watch.stop();
       final status = result.isError ? 'error' : 'success';
-      await record(
+      final event = await record(
         status,
         forwarded: prepared.forwarded,
         context: prepared.context,
@@ -109,11 +121,12 @@ class ToolCaller {
         status: status,
         result: result,
         durationMs: watch.elapsedMilliseconds,
+        event: event,
       );
     } catch (e) {
       watch.stop();
       final message = e is McpException ? e.message : '$e';
-      await record(
+      final event = await record(
         'error',
         forwarded: prepared.forwarded,
         context: prepared.context,
@@ -124,12 +137,14 @@ class ToolCaller {
         status: 'error',
         upstreamError: message,
         durationMs: watch.elapsedMilliseconds,
+        event: event,
       );
     }
   }
 
-  /// Writes one audit event (arguments and results masked and shortened).
-  Future<void> record({
+  /// Writes one audit event (arguments and results masked and shortened) and
+  /// returns it.
+  Future<GatewayAuditEvent> record({
     required String status,
     required Principal who,
     required Json args,
@@ -145,36 +160,42 @@ class ToolCaller {
     String? error,
     int? durationMs,
     String? conversationId,
-  }) {
+    String kind = 'toolCall',
+    String? actor,
+    String? approval,
+  }) async {
     final argsPreview = redactedPreview(args);
     final forwardedPreview =
         forwarded != null && jsonEncode(forwarded) != jsonEncode(args)
         ? redactedPreview(forwarded)
         : null;
-    return audit.record(
-      GatewayAuditEvent(
-        id: newId('evt'),
-        timestamp: _now(),
-        source: source,
-        portalId: portal?.id,
-        portalSlug: portal?.slug,
-        principal: who.toJson(),
-        status: status,
-        serverId: server?.id,
-        serverName: server?.name,
-        tool: tool,
-        exposedName: exposedName,
-        durationMs: durationMs,
-        args: argsPreview,
-        forwarded: forwardedPreview,
-        context: context == null || context.isEmpty
-            ? null
-            : redactedPreview(context),
-        result: result == null ? null : redactedPreview(result),
-        error: error == null ? null : redactText(error),
-        rules: rules,
-        conversationId: conversationId,
-      ),
+    final event = GatewayAuditEvent(
+      id: newId('evt'),
+      timestamp: _now(),
+      source: source,
+      portalId: portal?.id,
+      portalSlug: portal?.slug,
+      principal: who.toJson(),
+      status: status,
+      serverId: server?.id,
+      serverName: server?.name,
+      tool: tool,
+      exposedName: exposedName,
+      durationMs: durationMs,
+      args: argsPreview,
+      forwarded: forwardedPreview,
+      context: context == null || context.isEmpty
+          ? null
+          : redactedPreview(context),
+      result: result == null ? null : redactedPreview(result),
+      error: error == null ? null : redactText(error),
+      rules: rules,
+      conversationId: conversationId,
+      kind: kind,
+      actor: actor,
+      approval: approval,
     );
+    await audit.record(event);
+    return event;
   }
 }

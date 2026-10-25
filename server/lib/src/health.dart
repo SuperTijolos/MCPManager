@@ -1,5 +1,8 @@
 import 'dart:async';
 
+import 'package:mcp_core/mcp_core.dart';
+
+import 'audit.dart';
 import 'events.dart';
 import 'models.dart';
 import 'state.dart';
@@ -34,6 +37,7 @@ class HealthMonitor {
     required this.store,
     required this.pool,
     required this.bus,
+    required this.audit,
     this.interval = const Duration(minutes: 1),
     DateTime Function()? clock,
   }) : _now = clock ?? DateTime.now;
@@ -41,6 +45,7 @@ class HealthMonitor {
   final StateStore store;
   final UpstreamPool pool;
   final EventBus bus;
+  final GatewayAuditLog audit;
   final Duration interval;
   final DateTime Function() _now;
 
@@ -73,21 +78,19 @@ class HealthMonitor {
 
   Future<void> _checkOne(UpstreamServer server) async {
     final catalog = await pool.catalog(server, refresh: true);
-    final health = ServerHealth(
-      ok: catalog.ok,
-      checkedAt: _now(),
-      error: catalog.error,
-      toolCount: catalog.tools.length,
-    );
-    final before = _last[server.id];
-    _last[server.id] = health;
-    if (before == null || before.ok != health.ok) {
-      bus.emit('health', {'serverId': server.id, ...health.toJson()});
-    }
+    await _record(server, catalog);
   }
 
   /// Records what a check elsewhere (the "test" button) found.
   void note(UpstreamServer server, UpstreamCatalog catalog) {
+    unawaited(_record(server, catalog));
+  }
+
+  /// Like [note], and completes once it has been written.
+  Future<void> recorded(UpstreamServer server, UpstreamCatalog catalog) =>
+      _record(server, catalog);
+
+  Future<void> _record(UpstreamServer server, UpstreamCatalog catalog) async {
     final health = ServerHealth(
       ok: catalog.ok,
       checkedAt: _now(),
@@ -96,9 +99,25 @@ class HealthMonitor {
     );
     final before = _last[server.id];
     _last[server.id] = health;
-    if (before == null || before.ok != health.ok) {
-      bus.emit('health', {'serverId': server.id, ...health.toJson()});
-    }
+    if (before != null && before.ok == health.ok) return;
+    bus.emit('health', {'serverId': server.id, ...health.toJson()});
+    // The audit log shows each time a server came up or went down.
+    final info = catalog.info;
+    await audit.record(
+      GatewayAuditEvent.system(
+        id: newId('evt'),
+        timestamp: _now(),
+        kind: 'serverConnect',
+        status: health.ok ? 'success' : 'error',
+        serverId: server.id,
+        serverName: server.name,
+        result: health.ok
+            ? '${info?.name ?? server.name} ${info?.version ?? ''} · '
+                  '${catalog.tools.length} tools'
+            : null,
+        error: health.ok ? null : redactText(catalog.error ?? 'Unreachable'),
+      ),
+    );
   }
 
   void stop() {

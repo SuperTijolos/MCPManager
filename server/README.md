@@ -1,6 +1,6 @@
-# MCP portal gateway
+# MCP Manager server
 
-The gateway turns the MCP servers you already use into **portals**: one authenticated MCP endpoint per portal (`https://your-host/mcp/<name>`) that Claude, ChatGPT, Claude Code or any other MCP client can connect to. A portal publishes a chosen set of servers, reshapes their tools with the same rules the app uses, checks who is calling, and records every call.
+This is the server behind the MCP Manager dashboard: it holds everything in PostgreSQL, connects to your MCP servers on the dashboard's behalf, and turns them into **portals**: one authenticated MCP endpoint per portal (`https://your-host/mcp/<name>`) that Claude, ChatGPT, Claude Code or any other MCP client can connect to. A portal publishes a chosen set of servers, reshapes their tools with the same rules the dashboard edits, checks who is calling, and records every call (portal clients, the dashboard's test bench and its chat alike).
 
 ```
 Claude / ChatGPT / any MCP client
@@ -12,7 +12,7 @@ Claude / ChatGPT / any MCP client
   upstream MCP servers  (Streamable HTTP or legacy SSE)
 ```
 
-It is a small Dart program that keeps everything (servers, rules, portals, tokens, OAuth grants, the audit log) in **PostgreSQL**. The MCP Manager app (Portals page) is its control panel, but everything it does is also a plain HTTP API.
+It is a small Dart program that keeps everything (servers, rules, portals, tokens, OAuth grants, the audit log) in **PostgreSQL**. The dashboard is a thin client of its HTTP API (and its live event stream), which is also open to scripts.
 
 ## Run it
 
@@ -73,17 +73,17 @@ The gateway speaks plain HTTP. Anything beyond your own machine needs TLS, or th
 
 ## Using it
 
-1. **Connect the app.** Open **Portals** in MCP Manager, enter the gateway address and the admin token.
-2. **Put servers on the gateway.** *Servers → Put on gateway* sends a server (address and headers) under the same id it has in the app, so tool rules written there apply here. Servers that use OAuth sign-in through the browser cannot be used by a gateway; give them a token instead.
-3. **Create a portal.** Choose a name, an address (`/mcp/<address>`) and the servers it publishes. *Tools* shows what clients will see and lets you leave tools out of this portal.
+1. **Sign in.** Open the dashboard and sign in with GitHub (see above), or with the admin token.
+2. **Add servers.** On *MCP Servers*, add each MCP server once: the address and any token or OAuth sign-in. Servers that use OAuth are signed in by this server, once, for everyone and every portal.
+3. **Create a portal.** On *Portals*, choose a name, an address (`/mcp/<address>`) and the servers it publishes. *Tools* shows what clients will see and lets you leave tools out of this portal.
 4. **Let a client in.**
-   * **Claude, ChatGPT and other web connectors** add a custom connector with the portal address. The client registers itself, opens the gateway's sign-in page, and you enter the admin token there. Tokens last an hour and refresh by themselves.
+   * **Claude, ChatGPT and other web connectors** add a custom connector with the portal address. The client registers itself and opens this server's sign-in page, where you sign in with GitHub (or enter the admin token). Tokens last an hour and refresh by themselves.
    * **Claude Code, scripts, MCP Inspector** use an access token from *Access*: `claude mcp add --transport http dev https://mcp.example.com/mcp/dev --header "Authorization: Bearer mcp_…"`. A token can be limited to some portals and can expire. Its secret is shown once.
-5. **Watch it.** *Activity* lists each call with who made it, the arguments the client sent, what was forwarded to the server, and the result.
+5. **Watch it.** The dashboard's *Audit* page lists each call with who made it, the arguments the client sent, what was forwarded to the server, and the result; calls through a portal are marked as such.
 
 ### Tool names and rules
 
-Tools appear as `<server prefix>__<tool>` (the prefix is the server's slug, which you can change). The rules and per-tool settings sent from the app (*Servers → Tool rules → Send to gateway*) apply to every portal: extra arguments the client must fill in, values kept only in the audit log, fixed values injected on the server's behalf, added instructions, and hidden tools. Calls missing a required rule argument are refused before they reach the server and are recorded.
+Tools appear as `<server prefix>__<tool>` (the prefix is the server's slug, which you can change). The rules and per-tool settings edited on the dashboard's *MCP Tools* page apply to every portal and to the dashboard's own calls: extra arguments the client must fill in, values kept only in the audit log, fixed values injected on the server's behalf, added instructions, and hidden tools. Calls missing a required rule argument are refused before they reach the server and are recorded.
 
 ## What it protects, and what it does not
 
@@ -130,4 +130,4 @@ dart analyze
 dart test        # protocol, rules, OAuth, persistence and admin API tests
 ```
 
-The gateway shares its MCP clients, models and rule engine with the app through `packages/mcp_core`. The app's own tests start this gateway in memory, so the Portals page and the app's MCP client are tested against the real thing.
+The gateway shares its MCP clients, models and rule engine with the app through `packages/mcp_core`. The dashboard's tests start this server in memory, so the dashboard is tested against the real thing.

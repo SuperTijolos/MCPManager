@@ -66,5 +66,16 @@ class BroadcastAuditLog implements GatewayAuditLog {
   );
 
   @override
+  Future<int> delete({
+    List<String>? ids,
+    DateTime? before,
+    bool all = false,
+  }) async {
+    final removed = await inner.delete(ids: ids, before: before, all: all);
+    if (removed > 0) bus.emit('audit-deleted', {'count': removed});
+    return removed;
+  }
+
+  @override
   Future<void> flush() => inner.flush();
 }

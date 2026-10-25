@@ -22,14 +22,16 @@ class PgAuditLog implements GatewayAuditLog {
             insert into audit_events (
               id, ts, source, portal_id, portal_slug, principal, status,
               server_id, server_name, tool, exposed_name, duration_ms,
-              args, forwarded, context, result, error, rules, conversation_id
+              args, forwarded, context, result, error, rules, conversation_id,
+              kind, actor, approval
             ) values (
               @id:text, @ts:timestamptz, @source:text, @portal_id:text,
               @portal_slug:text, @principal:jsonb, @status:text,
               @server_id:text, @server_name:text, @tool:text,
               @exposed_name:text, @duration_ms:int4, @args:text,
               @forwarded:text, @context:text, @result:text, @error:text,
-              @rules:_text, @conversation_id:text
+              @rules:_text, @conversation_id:text,
+              @kind:text, @actor:text, @approval:text
             ) on conflict (id) do nothing
           '''),
           parameters: {
@@ -52,6 +54,9 @@ class PgAuditLog implements GatewayAuditLog {
             'error': e.error,
             'rules': e.rules,
             'conversation_id': e.conversationId,
+            'kind': e.kind,
+            'actor': e.actor,
+            'approval': e.approval,
           },
         );
       } catch (_) {
@@ -99,6 +104,25 @@ class PgAuditLog implements GatewayAuditLog {
   }
 
   @override
+  Future<int> delete({
+    List<String>? ids,
+    DateTime? before,
+    bool all = false,
+  }) async {
+    await _queue;
+    final r = await db.pool.execute(
+      Sql.named('''
+        delete from audit_events
+        where @all:boolean
+           or (@ids:_text is not null and id = any(@ids:_text))
+           or (@before:timestamptz is not null and ts < @before:timestamptz)
+      '''),
+      parameters: {'all': all, 'ids': ids, 'before': before?.toUtc()},
+    );
+    return r.affectedRows;
+  }
+
+  @override
   Future<void> flush() => _queue;
 }
 
@@ -122,4 +146,7 @@ GatewayAuditEvent _fromRow(Map<String, Object?> r) => GatewayAuditEvent(
   error: r['error'] as String?,
   rules: [for (final x in (r['rules'] as List?) ?? const []) '$x'],
   conversationId: r['conversation_id'] as String?,
+  kind: r['kind'] as String,
+  actor: r['actor'] as String?,
+  approval: r['approval'] as String?,
 );

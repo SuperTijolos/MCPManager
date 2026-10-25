@@ -10,6 +10,9 @@ class GatewayAuditEvent {
     required this.principal,
     required this.status,
     this.source = 'portal',
+    this.kind = 'toolCall',
+    this.actor,
+    this.approval,
     this.serverId,
     this.serverName,
     this.tool,
@@ -40,6 +43,16 @@ class GatewayAuditEvent {
   /// Where the call came from: `portal` (an MCP client), `dashboard` (the
   /// test bench) or `chat`.
   final String source;
+
+  /// `toolCall`, `serverConnect`, `authorize` or `manage`.
+  final String kind;
+
+  /// Who did it as the dashboard names it (`user`, `operator:<model>`).
+  final String? actor;
+
+  /// How a person approved a chat call: `auto`, `user`, `session`,
+  /// `automatic` or `denied`.
+  final String? approval;
   final String? serverId;
   final String? serverName;
   final String? tool;
@@ -55,6 +68,33 @@ class GatewayAuditEvent {
   /// The dashboard chat the call belongs to, when it came from one.
   final String? conversationId;
 
+  /// Something the gateway did on its own: a server went up or down, or a
+  /// sign-in upstream finished.
+  factory GatewayAuditEvent.system({
+    required String id,
+    required DateTime timestamp,
+    required String kind,
+    required String status,
+    String? serverId,
+    String? serverName,
+    String? result,
+    String? error,
+    int? durationMs,
+  }) => GatewayAuditEvent(
+    id: id,
+    timestamp: timestamp,
+    source: 'system',
+    kind: kind,
+    principal: const {'kind': 'system', 'id': 'system', 'name': 'System'},
+    status: status,
+    actor: 'system',
+    serverId: serverId,
+    serverName: serverName,
+    result: result,
+    error: error,
+    durationMs: durationMs,
+  );
+
   Json toJson() => {
     'id': id,
     'ts': timestamp.toUtc().toIso8601String(),
@@ -63,6 +103,9 @@ class GatewayAuditEvent {
     'principal': principal,
     'status': status,
     if (source != 'portal') 'source': source,
+    if (kind != 'toolCall') 'kind': kind,
+    'actor': ?actor,
+    'approval': ?approval,
     'serverId': ?serverId,
     'serverName': ?serverName,
     'tool': ?tool,
@@ -86,6 +129,9 @@ class GatewayAuditEvent {
         .cast<String, dynamic>(),
     status: json['status'] as String,
     source: json['source'] as String? ?? 'portal',
+    kind: json['kind'] as String? ?? 'toolCall',
+    actor: json['actor'] as String?,
+    approval: json['approval'] as String?,
     serverId: json['serverId'] as String?,
     serverName: json['serverName'] as String?,
     tool: json['tool'] as String?,
@@ -117,6 +163,10 @@ abstract class GatewayAuditLog {
     String? source,
     String? conversationId,
   });
+
+  /// Removes events: the given [ids], those older than [before], or [all].
+  /// Returns how many went.
+  Future<int> delete({List<String>? ids, DateTime? before, bool all = false});
 
   /// Waits for events still being written.
   Future<void> flush();
@@ -162,6 +212,22 @@ class MemoryAuditLog implements GatewayAuditLog {
       if (out.length >= limit) break;
     }
     return out;
+  }
+
+  @override
+  Future<int> delete({
+    List<String>? ids,
+    DateTime? before,
+    bool all = false,
+  }) async {
+    final count = _recent.length;
+    _recent.removeWhere(
+      (e) =>
+          all ||
+          (ids != null && ids.contains(e.id)) ||
+          (before != null && e.timestamp.isBefore(before)),
+    );
+    return count - _recent.length;
   }
 
   @override

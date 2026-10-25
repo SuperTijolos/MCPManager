@@ -138,6 +138,12 @@ class AdminApi {
         return _members(request, method, parts);
       case 'rules' when parts.length == 1:
         return _rules(request, method);
+      case 'audit' when method == 'POST' && parts.length == 2:
+        return parts[1] == 'events'
+            ? _auditEvent(request)
+            : parts[1] == 'delete'
+            ? _auditDelete(request)
+            : throw ApiError(404, 'not_found');
       case 'audit' when method == 'GET' && parts.length == 1:
         final q = request.url.queryParameters;
         final events = await audit.recent(
@@ -233,6 +239,9 @@ class AdminApi {
     List<String> parts,
   ) async {
     final state = store.state;
+    if (parts.length == 2 && parts[1] == 'probe' && method == 'POST') {
+      return _probe(request);
+    }
     if (parts.length == 1) {
       if (method == 'GET') {
         return _json(200, [for (final s in state.servers) s.toPublicJson()]);
@@ -294,10 +303,11 @@ class AdminApi {
     } else if (parts.length == 3 && method == 'GET' && parts[2] == 'tools') {
       final server =
           state.server(parts[1]) ?? (throw ApiError(404, 'server_not_found'));
-      final catalog = await pool.catalog(
-        server,
-        refresh: request.url.queryParameters['refresh'] == '1',
-      );
+      final refresh = request.url.queryParameters['refresh'] == '1';
+      final catalog = await pool.catalog(server, refresh: refresh);
+      // An explicit re-check is a connection attempt: the health record (and
+      // the audit log, when the server went up or down) follows it.
+      if (refresh) await health.recorded(server, catalog);
       return _json(200, _catalogJson(server, catalog));
     } else if (parts.length == 3 && method == 'POST' && parts[2] == 'call') {
       return _call(request, parts[1]);
@@ -407,6 +417,72 @@ class AdminApi {
     throw ApiError(405, 'method_not_allowed');
   }
 
+  /// Tries a server's settings without saving anything: "Test connection".
+  /// With a `serverId` it starts from that server's saved settings (so header
+  /// values it already holds, and its sign-in, are used).
+  Future<Response> _probe(Request request) async {
+    final body = await _body(request);
+    final base = body['serverId'] is String
+        ? store.state.server(body['serverId'] as String)
+        : null;
+
+    final rawUrl = body['url'] ?? base?.url;
+    if (rawUrl is! String || rawUrl.trim().isEmpty) {
+      throw ApiError(400, 'invalid_url', 'url is required');
+    }
+    final url = normalizeBaseUrl(rawUrl.trim());
+    if (!isValidHttpUrl(url)) {
+      throw ApiError(
+        400,
+        'invalid_url',
+        'The URL must be a valid http(s) address',
+      );
+    }
+    var headers = base?.headers ?? const <String, String>{};
+    if (body.containsKey('headers')) {
+      final raw = body['headers'];
+      if (raw is! Map) throw ApiError(400, 'invalid_headers');
+      headers = {
+        for (final e in raw.entries)
+          if (e.value != null)
+            '${e.key}': '${e.value}'
+          else if (base?.headers['${e.key}'] != null)
+            '${e.key}': base!.headers['${e.key}']!,
+      };
+    }
+    final server = UpstreamServer(
+      id: base?.id ?? 'probe',
+      name: base?.name ?? 'probe',
+      slug: 'probe',
+      url: url,
+      headers: headers,
+      transport: body.containsKey('transport')
+          ? McpTransport.parse(body['transport'])
+          : (base?.transport ?? McpTransport.auto),
+      oauth: body['oauth'] as bool? ?? base?.oauth ?? false,
+      oauthClientId: body.containsKey('oauthClientId')
+          ? _optionalText(body['oauthClientId'])
+          : base?.oauthClientId,
+      oauthScope: body.containsKey('oauthScope')
+          ? _optionalText(body['oauthScope'])
+          : base?.oauthScope,
+    );
+    final r = await pool.probe(server, signedInAs: base?.id);
+    return _json(200, {
+      'connected': r.connected,
+      'needsAuth': r.needsAuth,
+      'error': r.error,
+      'server': r.info == null
+          ? null
+          : {'name': r.info!.name, 'version': r.info!.version},
+      'toolCount': r.toolCount,
+      'transport': r.transport?.wire,
+      'endpoint': r.endpoint,
+      'latencyMs': r.latencyMs,
+      'trace': r.trace,
+    });
+  }
+
   /// Signing the gateway in to an upstream server that uses OAuth.
   Future<Response> _upstreamOAuth(
     Request request,
@@ -462,6 +538,8 @@ class AdminApi {
         ? null
         : {'name': catalog.info!.name, 'version': catalog.info!.version},
     'transport': catalog.transport?.wire,
+    'endpoint': catalog.endpoint,
+    'trace': catalog.trace,
     'tools': [
       for (final t in catalog.tools)
         {
@@ -517,6 +595,93 @@ class AdminApi {
 
   /// Calls a tool for the dashboard (its test bench or its chat). Rules apply
   /// and the call is recorded, exactly as for a portal client.
+  /// An event the dashboard itself observed: a management action by the
+  /// Operator, or a call a person refused. The server stamps the time and
+  /// the caller; text is masked and shortened.
+  Future<Response> _auditEvent(Request request) async {
+    final body = await _body(request);
+    final who = request.context['who'] as Principal;
+    String? text(String key, {int max = 4000}) {
+      final v = body[key];
+      if (v == null) return null;
+      if (v is! String) throw ApiError(400, 'invalid_$key');
+      return v.length > max ? v.substring(0, max) : v;
+    }
+
+    final kind = body['kind'] ?? 'manage';
+    if (kind != 'manage' && kind != 'toolCall') {
+      throw ApiError(400, 'invalid_kind', 'kind is manage or toolCall');
+    }
+    final source = body['source'] ?? 'chat';
+    if (source != 'dashboard' && source != 'chat') {
+      throw ApiError(400, 'invalid_source', 'source is dashboard or chat');
+    }
+    final status = body['status'];
+    if (status != 'success' && status != 'error' && status != 'denied') {
+      throw ApiError(400, 'invalid_status');
+    }
+    final duration = body['durationMs'];
+    if (duration != null && (duration is! int || duration < 0)) {
+      throw ApiError(400, 'invalid_duration');
+    }
+    final args = text('args');
+    final result = text('result');
+    final error = text('error', max: 1000);
+    final event = GatewayAuditEvent(
+      id: newId('evt'),
+      timestamp: _now(),
+      source: '$source',
+      kind: '$kind',
+      principal: who.toJson(),
+      status: status as String,
+      serverId: text('serverId', max: 200),
+      serverName: text('serverName', max: 200),
+      tool: text('tool', max: 200),
+      durationMs: duration as int?,
+      args: args == null ? null : redactText(args),
+      result: result == null ? null : redactText(result),
+      error: error == null ? null : redactText(error),
+      actor: _shortText(body['actor']),
+      approval: _shortText(body['approval']),
+      conversationId: _shortText(body['conversationId']),
+    );
+    await audit.record(event);
+    return _json(201, event.toJson());
+  }
+
+  /// Removes recorded events: by id, by age, or all of them.
+  Future<Response> _auditDelete(Request request) async {
+    final body = await _body(request);
+    final ids = body['ids'];
+    final before = body['before'];
+    final all = body['all'] == true;
+    if (ids != null &&
+        (ids is! List || ids.length > 5000 || ids.any((e) => e is! String))) {
+      throw ApiError(400, 'invalid_ids', 'ids is a list of up to 5000 ids.');
+    }
+    DateTime? cutoff;
+    if (before != null) {
+      cutoff = before is String ? DateTime.tryParse(before) : null;
+      if (cutoff == null) throw ApiError(400, 'invalid_before');
+    }
+    if (ids == null && cutoff == null && !all) {
+      throw ApiError(400, 'nothing_to_delete', 'Give ids, before, or all.');
+    }
+    final removed = await audit.delete(
+      ids: ids == null ? null : [for (final e in ids as List) '$e'],
+      before: cutoff,
+      all: all,
+    );
+    return _json(200, {'removed': removed});
+  }
+
+  String? _shortText(Object? v, {int max = 200}) {
+    if (v is! String) return null;
+    final t = v.trim();
+    if (t.isEmpty) return null;
+    return t.length > max ? t.substring(0, max) : t;
+  }
+
   Future<Response> _call(Request request, String serverId) async {
     final server =
         store.state.server(serverId) ??
@@ -540,6 +705,16 @@ class AdminApi {
     final conversationId = body['conversationId'] is String
         ? body['conversationId'] as String
         : null;
+    final actor = _shortText(body['actor']);
+    final approval = _shortText(body['approval']);
+    final applyRules = body['applyRules'] != false;
+    if (!applyRules && source != 'dashboard') {
+      throw ApiError(
+        400,
+        'invalid_apply_rules',
+        'Only the dashboard may call without the rules.',
+      );
+    }
     if (!server.enabled) throw ApiError(409, 'server_disabled');
 
     final catalog = await pool.catalog(server);
@@ -554,6 +729,8 @@ class AdminApi {
         args: args,
         error: catalog.error,
         conversationId: conversationId,
+        actor: actor,
+        approval: approval,
       );
       throw ApiError(502, 'server_unreachable', catalog.error);
     }
@@ -567,6 +744,8 @@ class AdminApi {
         args: args,
         error: catalog.error ?? 'The server has no such tool',
         conversationId: conversationId,
+        actor: actor,
+        approval: approval,
       );
       throw ApiError(
         404,
@@ -581,6 +760,10 @@ class AdminApi {
       store.state.rules,
       store.state.overrides[key],
     );
+    // A test run without the rules sends the arguments exactly as typed.
+    final callEffective = applyRules
+        ? effective
+        : computeEffective(server.toConfig(), tool, const [], null);
     // Tools hidden from the Operator stay out of the chat's reach, whatever
     // the dashboard asks for.
     if (source == 'chat' && !effective.visible) {
@@ -594,6 +777,8 @@ class AdminApi {
         rules: effective.rules,
         error: 'This tool is hidden from the Operator',
         conversationId: conversationId,
+        actor: actor,
+        approval: approval,
       );
       throw ApiError(
         403,
@@ -605,11 +790,13 @@ class AdminApi {
     final outcome = await caller.run(
       server: server,
       toolName: tool.name,
-      effective: effective,
+      effective: callEffective,
       args: args,
       who: who,
       source: '$source',
       conversationId: conversationId,
+      actor: actor,
+      approval: approval,
     );
     final result = outcome.result;
     return _json(200, {
@@ -621,6 +808,7 @@ class AdminApi {
       'rejected': outcome.rejected,
       'error': outcome.upstreamError,
       'durationMs': outcome.durationMs,
+      'event': outcome.event?.toJson(),
     });
   }
 
@@ -665,7 +853,15 @@ class AdminApi {
     if (body.containsKey('headers')) {
       final raw = body['headers'];
       if (raw is! Map) throw ApiError(400, 'invalid_headers');
-      headers = {for (final e in raw.entries) '${e.key}': '${e.value}'};
+      // A header sent with a null value keeps the value stored under that name,
+      // so the dashboard can edit one header without ever having seen the rest.
+      headers = {
+        for (final e in raw.entries)
+          if (e.value != null)
+            '${e.key}': '${e.value}'
+          else if (existing?.headers['${e.key}'] != null)
+            '${e.key}': existing!.headers['${e.key}']!,
+      };
     }
 
     final server = UpstreamServer(

@@ -20,6 +20,7 @@ import 'db/pg_audit.dart';
 import 'db/pg_chats.dart';
 import 'db/pg_state.dart';
 import 'mcp_endpoint.dart';
+import 'models.dart';
 import 'oauth.dart';
 import 'security.dart';
 import 'state.dart';
@@ -146,11 +147,34 @@ class GatewayServer {
     final upstreamOAuth = UpstreamOAuth(
       store: store,
       bus: bus,
+      audit: audit,
       onSessionChanged: pool.invalidate,
       httpClient: upstreamClient,
       clock: clock,
     );
     pool.tokenSource = upstreamOAuth.accessToken;
+    // Remember what auto-detection found, so the next connect goes straight
+    // there and the dashboard shows what is really in use.
+    pool.onResolved = (server, transport, endpoint) {
+      final current = store.state.server(server.id);
+      if (current == null || current.url != server.url) return;
+      store.update((s) {
+        final i = s.servers.indexWhere((x) => x.id == server.id);
+        if (i < 0 || s.servers[i].url != server.url) return;
+        s.servers[i] = UpstreamServer(
+          id: current.id,
+          name: current.name,
+          slug: current.slug,
+          url: endpoint,
+          headers: current.headers,
+          transport: transport,
+          enabled: current.enabled,
+          oauth: current.oauth,
+          oauthClientId: current.oauthClientId,
+          oauthScope: current.oauthScope,
+        );
+      });
+    };
     return GatewayServer._(
       config: config,
       store: store,
@@ -162,6 +186,7 @@ class GatewayServer {
         store: store,
         pool: pool,
         bus: bus,
+        audit: audit,
         interval: config.healthInterval,
         clock: clock,
       ),
