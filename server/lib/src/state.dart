@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:mcp_core/mcp_core.dart';
 
 import 'models.dart';
+import 'permissions.dart';
 
 /// Everything the gateway remembers, in one document.
 class PortalState {
@@ -20,6 +21,8 @@ class PortalState {
     Map<String, OAuthSession>? upstreamOAuth,
     List<LlmProviderConfig>? llmProviders,
     List<AuthProviderConfig>? authProviders,
+    List<Role>? roles,
+    List<Invite>? invites,
   }) : servers = servers ?? [],
        portals = portals ?? [],
        tokens = tokens ?? [],
@@ -31,7 +34,9 @@ class PortalState {
        sessions = sessions ?? [],
        upstreamOAuth = upstreamOAuth ?? {},
        llmProviders = llmProviders ?? [],
-       authProviders = authProviders ?? [];
+       authProviders = authProviders ?? [],
+       roles = roles ?? [],
+       invites = invites ?? [];
 
   /// Set when the admin token was generated at first start.
   String? adminTokenHash;
@@ -58,6 +63,16 @@ class PortalState {
   /// (the environment's GitHub app is separate). Secrets.
   final List<AuthProviderConfig> authProviders;
 
+  /// Roles someone created (the built-in ones are in [builtinRoles]).
+  final List<Role> roles;
+
+  /// Invitations, pending and used.
+  final List<Invite> invites;
+
+  /// A built-in or custom role by id.
+  Role? role(String id) =>
+      [...builtinRoles, ...roles].where((r) => r.id == id).firstOrNull;
+
   UpstreamServer? server(String id) =>
       servers.where((s) => s.id == id).firstOrNull;
   Portal? portal(String id) => portals.where((p) => p.id == id).firstOrNull;
@@ -78,6 +93,8 @@ class PortalState {
     'sessions': [for (final x in sessions) x.toJson()],
     'llmProviders': [for (final p in llmProviders) p.toJson()],
     'authProviders': [for (final p in authProviders) p.toJson()],
+    'roles': [for (final r in roles) r.toJson()],
+    'invites': [for (final i in invites) i.toJson()],
     'upstreamOAuth': {
       for (final e in upstreamOAuth.entries) e.key: e.value.toJson(),
     },
@@ -106,6 +123,8 @@ class PortalState {
       sessions: list('sessions', DashSession.fromJson),
       llmProviders: list('llmProviders', LlmProviderConfig.fromJson),
       authProviders: list('authProviders', AuthProviderConfig.fromJson),
+      roles: list('roles', Role.fromJson),
+      invites: list('invites', Invite.fromJson),
       upstreamOAuth: {
         for (final e in ((json['upstreamOAuth'] as Map?) ?? const {}).entries)
           '${e.key}': OAuthSession.fromJson(
@@ -153,6 +172,8 @@ class StateStore {
     'rules',
     'overrides',
     'members',
+    'roles',
+    'invites',
   ];
 
   Map<String, String> _snapshot() {

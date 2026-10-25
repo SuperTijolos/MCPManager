@@ -366,6 +366,9 @@ class Member {
     this.emails = const [],
     this.provider = 'github',
     this.role = 'admin',
+    this.serverIds,
+    this.portalIds,
+    this.viaInvite = false,
     this.lastSeenAt,
   });
 
@@ -383,7 +386,17 @@ class Member {
 
   /// The sign-in provider they came through (its id, e.g. `github`).
   final String provider;
+
+  /// A role id: a built-in one or one someone created.
   final String role;
+
+  /// The servers and portals they are limited to; null means all of them.
+  final List<String>? serverIds;
+  final List<String>? portalIds;
+
+  /// They were let in by an invite, so they stay in even when no provider's
+  /// list names them.
+  final bool viaInvite;
   final DateTime createdAt;
   final DateTime? lastSeenAt;
 
@@ -405,8 +418,35 @@ class Member {
     emails: emails ?? this.emails,
     provider: provider,
     role: role,
+    serverIds: serverIds,
+    portalIds: portalIds,
+    viaInvite: viaInvite,
     createdAt: createdAt,
     lastSeenAt: lastSeenAt ?? this.lastSeenAt,
+  );
+
+  /// The same person with other access. The lists are taken as given, so
+  /// null means "all".
+  Member withAccess({
+    required String role,
+    required List<String>? serverIds,
+    required List<String>? portalIds,
+    bool? viaInvite,
+  }) => Member(
+    id: id,
+    login: login,
+    name: name,
+    email: email,
+    avatarUrl: avatarUrl,
+    orgs: orgs,
+    emails: emails,
+    provider: provider,
+    role: role,
+    serverIds: serverIds,
+    portalIds: portalIds,
+    viaInvite: viaInvite ?? this.viaInvite,
+    createdAt: createdAt,
+    lastSeenAt: lastSeenAt,
   );
 
   Json toJson() => {
@@ -419,6 +459,9 @@ class Member {
     'emails': emails,
     'provider': provider,
     'role': role,
+    'serverIds': serverIds,
+    'portalIds': portalIds,
+    'viaInvite': viaInvite,
     'createdAt': createdAt.toUtc().toIso8601String(),
     if (lastSeenAt != null) 'lastSeenAt': lastSeenAt!.toUtc().toIso8601String(),
   };
@@ -433,6 +476,13 @@ class Member {
     emails: [for (final e in (json['emails'] as List?) ?? const []) '$e'],
     provider: json['provider'] as String? ?? 'github',
     role: json['role'] as String? ?? 'admin',
+    serverIds: json['serverIds'] == null
+        ? null
+        : [for (final e in json['serverIds'] as List) '$e'],
+    portalIds: json['portalIds'] == null
+        ? null
+        : [for (final e in json['portalIds'] as List) '$e'],
+    viaInvite: json['viaInvite'] as bool? ?? false,
     createdAt: DateTime.parse(json['createdAt'] as String),
     lastSeenAt: _date(json['lastSeenAt']),
   );
@@ -562,6 +612,7 @@ class AuthProviderConfig {
     this.users = const [],
     this.domains = const [],
     this.emails = const [],
+    this.defaultRole = 'viewer',
     this.fromEnvironment = false,
   });
 
@@ -589,6 +640,9 @@ class AuthProviderConfig {
   /// These verified email addresses may sign in.
   final List<String> emails;
 
+  /// The role people get when this provider's list lets them in.
+  final String defaultRole;
+
   /// Set by the server's environment (read-only here).
   final bool fromEnvironment;
 
@@ -611,6 +665,7 @@ class AuthProviderConfig {
     List<String>? users,
     List<String>? domains,
     List<String>? emails,
+    String? defaultRole,
   }) => AuthProviderConfig(
     id: id,
     kind: kind,
@@ -622,6 +677,7 @@ class AuthProviderConfig {
     users: users ?? this.users,
     domains: domains ?? this.domains,
     emails: emails ?? this.emails,
+    defaultRole: defaultRole ?? this.defaultRole,
     fromEnvironment: fromEnvironment,
   );
 
@@ -636,6 +692,7 @@ class AuthProviderConfig {
     'users': users,
     'domains': domains,
     'emails': emails,
+    'defaultRole': defaultRole,
   };
 
   /// What the dashboard may see: never the secret.
@@ -650,6 +707,7 @@ class AuthProviderConfig {
     'users': users,
     'domains': domains,
     'emails': emails,
+    'defaultRole': defaultRole,
     'source': fromEnvironment ? 'environment' : 'database',
     'callbackUrl': callbackUrl,
   };
@@ -669,6 +727,7 @@ class AuthProviderConfig {
       users: list('users'),
       domains: list('domains'),
       emails: list('emails'),
+      defaultRole: json['defaultRole'] as String? ?? 'viewer',
     );
   }
 }

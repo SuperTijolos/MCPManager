@@ -7,6 +7,7 @@ import 'package:shelf/shelf.dart';
 import 'config.dart';
 import 'models.dart';
 import 'pages.dart';
+import 'permissions.dart';
 import 'security.dart';
 import 'state.dart';
 
@@ -17,14 +18,17 @@ const _pendingTtl = Duration(minutes: 10);
 const _maxPending = 500;
 
 class _Pending {
-  _Pending(this.providerId, this.returnTo, this.expiresAt);
+  _Pending(this.providerId, this.returnTo, this.expiresAt, {this.inviteHash});
   final String providerId;
   final String returnTo;
   final DateTime expiresAt;
+
+  /// Hash of the invite link's token this sign-in started from.
+  final String? inviteHash;
 }
 
 /// Ids that are not providers.
-const reservedProviderIds = {'config', 'done'};
+const reservedProviderIds = {'config', 'done', 'invite'};
 
 /// Signing in to the dashboard with GitHub, Google, or any other provider set
 /// up for it.
@@ -69,6 +73,7 @@ class LoginService {
           clientSecret: config.githubClientSecret,
           orgs: config.githubOrgs,
           users: config.githubUsers,
+          defaultRole: config.defaultRole,
           fromEnvironment: true,
         ),
       ...saved,
@@ -87,12 +92,34 @@ class LoginService {
   bool get enabled => enabledProviders().isNotEmpty;
 
   /// Whether [member] may use the dashboard right now: their provider must
-  /// still be on, and they must match its allow-list. Checked on every
-  /// request, so taking someone off the list locks them out at once.
+  /// still be on, and they must match its allow-list or have been invited.
+  /// Checked on every request, so taking someone off the list locks them out
+  /// at once.
   bool allowed(Member member) {
     final p = provider(member.provider);
     if (p == null || !p.enabled || !p.configured) return false;
-    return matchesAllowList(p, member);
+    return member.viaInvite || matchesAllowList(p, member);
+  }
+
+  /// What [member] may do, from their role as it is now. A role that no
+  /// longer exists grants nothing.
+  Access accessFor(Member member) {
+    final role = store.state.role(member.role);
+    return Access(
+      permissions: role?.permissions ?? const {},
+      serverIds: member.serverIds,
+      portalIds: member.portalIds,
+    );
+  }
+
+  /// The invitation behind a link token, if it can still be used.
+  Invite? inviteForToken(String? token) {
+    if (token == null || token.isEmpty) return null;
+    final hash = hashSecret(token);
+    final now = _now();
+    return store.state.invites
+        .where((i) => constantTimeEquals(i.hash, hash) && i.pending(now))
+        .firstOrNull;
   }
 
   /// Whether [member] is on [p]'s allow-list (anyone listed by login,
@@ -170,6 +197,10 @@ class LoginService {
       });
     }
     if (path == 'auth/done' && method == 'GET') return _done(request);
+    final invite = RegExp(r'^auth/invite/([A-Za-z0-9_-]+)$').firstMatch(path);
+    if (invite != null && method == 'GET') {
+      return _invitePage(request, invite.group(1)!);
+    }
 
     final route = RegExp(r'^auth/([a-z0-9-]+)(/callback)?$').firstMatch(path);
     if (route == null || method != 'GET') {
@@ -191,7 +222,14 @@ class LoginService {
   }
 
   Response _begin(Request request, AuthProviderConfig p) {
-    final returnTo = safeReturn(request.url.queryParameters['return_to']);
+    final inviteToken = request.url.queryParameters['invite'];
+    final invite = inviteToken == null ? null : inviteForToken(inviteToken);
+    if (inviteToken != null && invite == null) {
+      return htmlResponse(400, htmlPage('Invitation not valid', _inviteGone));
+    }
+    final returnTo = safeReturn(
+      request.url.queryParameters['return_to'] ?? invite?.returnTo,
+    );
     if (returnTo == null) {
       return htmlResponse(
         400,
@@ -211,7 +249,12 @@ class LoginService {
       );
     }
     final state = randomSecret(bytes: 24);
-    _pending[state] = _Pending(p.id, returnTo, now.add(_pendingTtl));
+    _pending[state] = _Pending(
+      p.id,
+      returnTo,
+      now.add(_pendingTtl),
+      inviteHash: invite?.hash,
+    );
 
     final base = baseUrl(request);
     final redirectUri = '$base/auth/${p.id}/callback';
@@ -309,42 +352,113 @@ class LoginService {
       createdAt: _now(),
       lastSeenAt: _now(),
     );
-    if (!matchesAllowList(p, candidate)) {
+    // An invitation lets someone in whatever the provider's list says: the
+    // link they followed, or one made out to an email address they have
+    // verified.
+    final now0 = _now();
+    final emailsOf = {for (final e in candidate.emails) e.toLowerCase()};
+    final invites = store.state.invites;
+    Invite? invite = pending.inviteHash == null
+        ? null
+        : invites
+              .where((i) => i.hash == pending.inviteHash && i.pending(now0))
+              .firstOrNull;
+    if (invite != null &&
+        invite.email != null &&
+        !emailsOf.contains(invite.email!.toLowerCase())) {
+      return fail(
+        403,
+        'Wrong account',
+        'This invitation is for ${invite.email}. Sign in with the account '
+            'that has that verified email address.',
+      );
+    }
+    invite ??= invites
+        .where(
+          (i) =>
+              i.pending(now0) &&
+              i.email != null &&
+              emailsOf.contains(i.email!.toLowerCase()),
+        )
+        .firstOrNull;
+    final known = store.state.members
+        .where((m) => m.id == candidate.id)
+        .firstOrNull;
+    final stillInvited =
+        known != null && known.viaInvite && known.provider == p.id;
+    if (invite == null && !stillInvited && !matchesAllowList(p, candidate)) {
       return fail(
         403,
         'Not allowed',
         '${person.login} is not on the list this server lets in through '
-            '${p.name}.',
+            '${p.name}, and has no invitation.',
       );
     }
 
     final token = randomSecret(prefix: sessionPrefix);
     final now = _now();
-    await store.update((s) {
-      final i = s.members.indexWhere((m) => m.id == candidate.id);
-      if (i >= 0) {
-        s.members[i] = s.members[i].copyWith(
-          login: candidate.login,
-          name: candidate.name,
-          email: candidate.email,
-          avatarUrl: candidate.avatarUrl,
-          orgs: candidate.orgs,
-          emails: candidate.emails,
-          lastSeenAt: now,
+    try {
+      await store.update((s) {
+        // The invitation counts only if nobody used it since we looked.
+        final usable = invite == null
+            ? null
+            : s.invites
+                  .where((i) => i.id == invite!.id && i.pending(now))
+                  .firstOrNull;
+        final i = s.members.indexWhere((m) => m.id == candidate.id);
+        if (invite != null &&
+            usable == null &&
+            !matchesAllowList(p, candidate)) {
+          throw _LoginFailure('That invitation has just been used.');
+        }
+        String roleOf(String? wanted) =>
+            s.role(wanted ?? '') != null ? wanted! : 'viewer';
+        if (i >= 0) {
+          var m = s.members[i].copyWith(
+            login: candidate.login,
+            name: candidate.name,
+            email: candidate.email,
+            avatarUrl: candidate.avatarUrl,
+            orgs: candidate.orgs,
+            emails: candidate.emails,
+            lastSeenAt: now,
+          );
+          if (usable != null) {
+            m = m.withAccess(
+              role: roleOf(usable.role),
+              serverIds: usable.serverIds,
+              portalIds: usable.portalIds,
+              viaInvite: true,
+            );
+          }
+          s.members[i] = m;
+        } else {
+          s.members.add(
+            candidate.withAccess(
+              role: roleOf(usable?.role ?? p.defaultRole),
+              serverIds: usable?.serverIds,
+              portalIds: usable?.portalIds,
+              viaInvite: usable != null,
+            ),
+          );
+        }
+        if (usable != null) {
+          final k = s.invites.indexWhere((x) => x.id == usable.id);
+          s.invites[k] = usable.markUsed(candidate.id, now);
+        }
+        s.sessions.removeWhere((x) => !x.expiresAt.isAfter(now));
+        s.sessions.add(
+          DashSession(
+            hash: hashSecret(token),
+            memberId: candidate.id,
+            createdAt: now,
+            expiresAt: now.add(Duration(days: config.sessionDays)),
+          ),
         );
-      } else {
-        s.members.add(candidate);
-      }
-      s.sessions.removeWhere((x) => !x.expiresAt.isAfter(now));
-      s.sessions.add(
-        DashSession(
-          hash: hashSecret(token),
-          memberId: candidate.id,
-          createdAt: now,
-          expiresAt: now.add(Duration(days: config.sessionDays)),
-        ),
-      );
-    });
+      });
+    } on _LoginFailure catch (e) {
+      return fail(409, 'Cannot sign in', e.message);
+    }
 
     final cookie = _cookie(
       sessionCookie,
@@ -357,7 +471,12 @@ class LoginService {
     // A dashboard on another address gets the token in the fragment, which
     // never reaches a server or a log.
     final location = target.hasScheme
-        ? target.replace(fragment: 'session=$token').toString()
+        ? target
+              .replace(
+                fragment:
+                    'session=$token&server=${Uri.encodeQueryComponent(base)}',
+              )
+              .toString()
         : pending.returnTo;
     return Response.found(
       location,
@@ -366,6 +485,43 @@ class LoginService {
         'cache-control': 'no-store',
         'referrer-policy': 'no-referrer',
       },
+    );
+  }
+
+  static const _inviteGone =
+      '<p>This invitation is not valid any more: it was used, taken back or '
+      'has expired. Ask whoever sent it for a new one.</p>';
+
+  /// Where an invitation link lands: who invited you, as what, and how to
+  /// sign in.
+  Response _invitePage(Request request, String token) {
+    final invite = inviteForToken(token);
+    if (invite == null) {
+      return htmlResponse(404, htmlPage('Invitation not valid', _inviteGone));
+    }
+    final role = store.state.role(invite.role);
+    final returnTo = invite.returnTo == null
+        ? null
+        : safeReturn(invite.returnTo);
+    final buttons = [
+      for (final p in enabledProviders())
+        '<p><a class="button" href="/auth/${escapeHtml(p.id)}?invite='
+            '${Uri.encodeQueryComponent(token)}'
+            '${returnTo == null ? '' : '&return_to=${Uri.encodeQueryComponent(returnTo)}'}">'
+            'Join with ${escapeHtml(p.name)}</a></p>',
+    ];
+    return htmlResponse(
+      200,
+      htmlPage(
+        'You are invited',
+        '<p>You have been invited to this MCP Manager server as '
+            '<strong>${escapeHtml(role?.name ?? invite.role)}</strong>'
+            '${invite.createdBy.isEmpty ? '' : ' by ${escapeHtml(invite.createdBy)}'}.</p>'
+            '${invite.email == null ? '' : '<p class="hint">Sign in with the account whose verified email is <strong>${escapeHtml(invite.email!)}</strong>.</p>'}'
+            '${buttons.isEmpty ? '<p>No sign-in is set up on this server yet.</p>' : buttons.join()}',
+      ),
+    ).change(
+      headers: {'cache-control': 'no-store', 'referrer-policy': 'no-referrer'},
     );
   }
 

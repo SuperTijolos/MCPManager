@@ -4,6 +4,7 @@ import 'package:mcp_core/mcp_core.dart';
 import 'package:postgres/postgres.dart';
 
 import '../models.dart';
+import '../permissions.dart';
 import '../state.dart';
 import 'database.dart';
 
@@ -91,6 +92,7 @@ class PgStatePersistence implements StatePersistence {
           'users': _strings(r['users']),
           'domains': _strings(r['domains']),
           'emails': _strings(r['emails']),
+          'defaultRole': r['default_role'],
         }),
       );
     }
@@ -162,8 +164,48 @@ class PgStatePersistence implements StatePersistence {
           'emails': _strings(r['emails']),
           'provider': r['provider'],
           'role': r['role'],
+          'serverIds': r['server_ids'] == null
+              ? null
+              : _strings(r['server_ids']),
+          'portalIds': r['portal_ids'] == null
+              ? null
+              : _strings(r['portal_ids']),
+          'viaInvite': r['via_invite'],
           'createdAt': _iso(r['created_at']),
           'lastSeenAt': _iso(r['last_seen_at']),
+        }),
+      );
+    }
+    for (final r in rows['roles']!) {
+      state.roles.add(
+        Role.fromJson({
+          'id': r['id'],
+          'name': r['name'],
+          'description': r['description'],
+          'permissions': _strings(r['permissions']),
+          'createdAt': _iso(r['created_at']),
+        }),
+      );
+    }
+    for (final r in rows['invites']!) {
+      state.invites.add(
+        Invite.fromJson({
+          'id': r['id'],
+          'hash': r['hash'],
+          'email': r['email'],
+          'role': r['role'],
+          'serverIds': r['server_ids'] == null
+              ? null
+              : _strings(r['server_ids']),
+          'portalIds': r['portal_ids'] == null
+              ? null
+              : _strings(r['portal_ids']),
+          'returnTo': r['return_to'],
+          'createdBy': r['created_by'],
+          'createdAt': _iso(r['created_at']),
+          'expiresAt': _iso(r['expires_at']),
+          'usedBy': r['used_by'],
+          'usedAt': _iso(r['used_at']),
         }),
       );
     }
@@ -299,6 +341,7 @@ class PgStatePersistence implements StatePersistence {
         'users': x.users,
         'domains': x.domains,
         'emails': x.emails,
+        'default_role': x.defaultRole,
       };
       final secret = x.clientSecret;
       if (secret != null && secret.isNotEmpty) {
@@ -374,8 +417,38 @@ class PgStatePersistence implements StatePersistence {
         'emails': x.emails,
         'provider': x.provider,
         'role': x.role,
+        'server_ids': x.serverIds,
+        'portal_ids': x.portalIds,
+        'via_invite': x.viaInvite,
         'created_at': x.createdAt,
         'last_seen_at': x.lastSeenAt,
+      };
+    }
+    i = 0;
+    for (final x in s.roles) {
+      out['roles']![x.id] = {
+        'id': x.id,
+        'position': i++,
+        'name': x.name,
+        'description': x.description,
+        'permissions': (x.permissions.toList()..sort()),
+        'created_at': x.createdAt ?? DateTime.utc(1970),
+      };
+    }
+    for (final x in s.invites) {
+      out['invites']![x.id] = {
+        'id': x.id,
+        'hash': x.hash,
+        'email': x.email,
+        'role': x.role,
+        'server_ids': x.serverIds,
+        'portal_ids': x.portalIds,
+        'return_to': x.returnTo,
+        'created_by': x.createdBy,
+        'created_at': x.createdAt,
+        'expires_at': x.expiresAt,
+        'used_by': x.usedBy,
+        'used_at': x.usedAt,
       };
     }
     for (final x in s.sessions) {
@@ -470,6 +543,7 @@ const _tables = [
       'users': '_text',
       'domains': '_text',
       'emails': '_text',
+      'default_role': 'text',
     },
     order: 'position',
     touch: 'updated_at = now()',
@@ -535,8 +609,39 @@ const _tables = [
     'emails': '_text',
     'provider': 'text',
     'role': 'text',
+    'server_ids': '_text',
+    'portal_ids': '_text',
+    'via_invite': 'boolean',
     'created_at': 'timestamptz',
     'last_seen_at': 'timestamptz',
+  }, order: 'created_at'),
+  _Table(
+    'roles',
+    'id',
+    {
+      'id': 'text',
+      'position': 'int4',
+      'name': 'text',
+      'description': 'text',
+      'permissions': '_text',
+      'created_at': 'timestamptz',
+    },
+    order: 'position',
+    touch: 'updated_at = now()',
+  ),
+  _Table('invites', 'id', {
+    'id': 'text',
+    'hash': 'text',
+    'email': 'text',
+    'role': 'text',
+    'server_ids': '_text',
+    'portal_ids': '_text',
+    'return_to': 'text',
+    'created_by': 'text',
+    'created_at': 'timestamptz',
+    'expires_at': 'timestamptz',
+    'used_by': 'text',
+    'used_at': 'timestamptz',
   }, order: 'created_at'),
   _Table('sessions', 'hash', {
     'hash': 'text',

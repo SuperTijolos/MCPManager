@@ -177,6 +177,11 @@ void main() {
         r.headers['location'],
         startsWith('http://localhost:9555/#session='),
       );
+      // The dashboard is also told which server this was.
+      final params = Uri.splitQueryString(
+        Uri.parse(r.headers['location']!).fragment,
+      );
+      expect(params['server'], gw.base);
     });
 
     for (final bad in [

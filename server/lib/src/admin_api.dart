@@ -15,6 +15,7 @@ import 'llm_api.dart';
 import 'login.dart';
 import 'mcp_endpoint.dart' show gatewayVersion;
 import 'models.dart';
+import 'permissions.dart';
 import 'security.dart';
 import 'state.dart';
 import 'tool_caller.dart';
@@ -88,10 +89,12 @@ class AdminApi {
     }
     try {
       final route = path.substring(3).replaceAll(RegExp(r'^/|/$'), '');
+      final access = isAdmin ? Access.all() : login.accessFor(member!);
       if (route == 'me' && request.method == 'GET') {
         return _json(200, {
           'kind': isAdmin ? 'admin' : 'member',
           if (member != null) 'member': member.toJson(),
+          'access': access.toJson(),
         });
       }
       if (route == 'logout' && request.method == 'POST') {
@@ -102,7 +105,10 @@ class AdminApi {
       final who = member != null
           ? Principal(kind: 'member', id: member.id, name: member.login)
           : const Principal(kind: 'admin', id: 'admin', name: 'Admin token');
-      return await _route(request.change(context: {'who': who}), route);
+      return await _route(
+        request.change(context: {'who': who, 'access': access}),
+        route,
+      );
     } on ApiError catch (e) {
       return _json(e.status, {'error': e.code, 'message': ?e.message});
     } on FormatException catch (e) {
@@ -114,10 +120,18 @@ class AdminApi {
     final parts = path.isEmpty ? <String>[] : path.split('/');
     final method = request.method;
     final first = parts.isEmpty ? '' : parts.first;
+    final access = _access(request);
+    _authorize(access, method, parts);
 
     switch (first) {
       case 'status' when method == 'GET' && parts.length == 1:
         return _json(200, _status(request));
+      case 'permissions' when method == 'GET' && parts.length == 1:
+        return _json(200, [for (final d in allPermissionDefs) d.toJson()]);
+      case 'roles':
+        return _roles(request, method, parts);
+      case 'invites':
+        return _invites(request, method, parts);
       case 'servers':
         return _servers(request, method, parts);
       case 'portals':
@@ -133,7 +147,7 @@ class AdminApi {
       case 'health' when parts.length <= 2:
         return _health(request, method, parts);
       case 'events' when method == 'GET' && parts.length == 1:
-        return _events();
+        return _events(access);
       case 'members':
         return _members(request, method, parts);
       case 'auth' when parts.length >= 2 && parts[1] == 'providers':
@@ -163,9 +177,167 @@ class AdminApi {
     throw ApiError(404, 'not_found');
   }
 
+  Access _access(Request request) => request.context['access'] as Access;
+
+  /// Whether a caller with [access] may be told about [event]: the audit log
+  /// and a server's health follow the same rules as reading them.
+  bool _mayHear(Access access, GatewayEvent event) {
+    switch (event.type) {
+      case 'audit':
+      case 'audit-deleted':
+        return access.can('audit.view') &&
+            access.allServers &&
+            access.allPortals;
+      case 'health':
+      case 'oauth':
+        final id = event.data['serverId'];
+        return access.can('servers.view') &&
+            (id is! String || access.canServer(id));
+    }
+    return true;
+  }
+
+  /// Throws unless [a] may make this request. Lists are narrowed by the
+  /// handlers themselves; this covers the permission and, for one server or
+  /// portal, whether it is within the caller's scope.
+  void _authorize(Access a, String method, List<String> parts) {
+    final read = method == 'GET';
+    void need(String permission) {
+      if (!a.can(permission)) {
+        throw ApiError(
+          403,
+          'forbidden',
+          'You need the "$permission" permission for that.',
+        );
+      }
+    }
+
+    void everyServer() {
+      if (!a.allServers) {
+        throw ApiError(
+          403,
+          'forbidden',
+          'That needs access to all servers, not just some.',
+        );
+      }
+    }
+
+    void everyPortal() {
+      if (!a.allPortals) {
+        throw ApiError(
+          403,
+          'forbidden',
+          'That needs access to all portals, not just some.',
+        );
+      }
+    }
+
+    final state = store.state;
+    switch (parts.isEmpty ? '' : parts.first) {
+      case 'servers':
+        if (parts.length == 1) {
+          if (read) {
+            need('servers.view');
+          } else {
+            need('servers.manage');
+            everyServer();
+          }
+          return;
+        }
+        if (parts[1] == 'probe') {
+          need('servers.manage');
+          return;
+        }
+        final id = parts[1];
+        if (parts.length == 2) {
+          need(read ? 'servers.view' : 'servers.manage');
+        } else {
+          switch (parts[2]) {
+            case 'tools':
+              need('tools.view');
+            case 'call':
+              need('tools.call');
+            case 'oauth':
+              need(read ? 'servers.view' : 'servers.manage');
+            default:
+              need('servers.manage');
+          }
+        }
+        if (state.server(id) != null) {
+          if (!a.canServer(id)) throw ApiError(404, 'server_not_found');
+        } else if (method == 'PUT') {
+          everyServer();
+        }
+      case 'portals':
+        if (parts.length == 1) {
+          if (read) {
+            need('portals.view');
+          } else {
+            need('portals.manage');
+            everyPortal();
+            everyServer();
+          }
+          return;
+        }
+        final id = parts[1];
+        if (parts.length == 3 && parts[2] == 'tools') {
+          need('portals.view');
+          need('tools.view');
+        } else if (read) {
+          need('portals.view');
+        } else {
+          need('portals.manage');
+          everyServer();
+        }
+        if (state.portal(id) != null) {
+          if (!a.canPortal(id)) throw ApiError(404, 'portal_not_found');
+        } else if (method == 'PUT') {
+          everyPortal();
+        }
+      case 'tokens':
+        need('tokens.manage');
+        everyPortal();
+      case 'llm':
+        final writing = !read && !(parts.length > 3 && parts[3] == 'proxy');
+        need(writing ? 'llm.manage' : 'chats.use');
+      case 'chats':
+        need('chats.use');
+      case 'tools':
+        need('tools.view');
+      case 'health':
+        need('servers.view');
+      case 'rules':
+        if (read) {
+          need('tools.view');
+        } else {
+          need('rules.manage');
+          everyServer();
+        }
+      case 'audit':
+        if (read) {
+          need('audit.view');
+          everyServer();
+          everyPortal();
+        } else if (parts.length == 2 && parts[1] == 'delete') {
+          need('audit.manage');
+          everyServer();
+          everyPortal();
+        } else if (!a.can('chats.use') && !a.can('tools.call')) {
+          need('chats.use');
+        }
+      case 'members':
+      case 'invites':
+        need(read ? 'members.view' : 'members.manage');
+      case 'roles':
+        need(read ? 'members.view' : 'roles.manage');
+      case 'auth':
+        need('providers.manage');
+    }
+  }
+
   /// A Server-Sent Events stream of what happens on the gateway. Nothing is
   /// replayed: a client that reconnects reloads what it shows.
-  Response _events() {
+  Response _events(Access access) {
     late StreamController<List<int>> out;
     StreamSubscription<GatewayEvent>? subscription;
     Timer? timer;
@@ -173,9 +345,9 @@ class AdminApi {
     out = StreamController<List<int>>(
       onListen: () {
         out.add(utf8.encode('retry: 3000\nevent: ready\ndata: {}\n\n'));
-        subscription = bus.stream.listen(
-          (e) => out.add(utf8.encode(e.encode(++counter))),
-        );
+        subscription = bus.stream
+            .where((e) => _mayHear(access, e))
+            .listen((e) => out.add(utf8.encode(e.encode(++counter))));
         timer = Timer.periodic(
           heartbeat,
           (_) => out.add(utf8.encode(': keep-alive\n\n')),
@@ -197,28 +369,324 @@ class AdminApi {
     );
   }
 
+  // --------------------------------------------------- members, roles, invites
+
+  Role _roleOrThrow(String id) =>
+      store.state.role(id) ??
+      (throw ApiError(400, 'invalid_role', 'There is no role "$id".'));
+
+  /// A server or portal list from [body]: absent keeps [current], null means
+  /// all, a list limits to those (which must exist).
+  List<String>? _scopeFrom(
+    Json body,
+    String key,
+    Set<String> known,
+    List<String>? current,
+  ) {
+    if (!body.containsKey(key)) return current;
+    final raw = body[key];
+    if (raw == null) return null;
+    if (raw is! List) throw ApiError(400, 'invalid_$key');
+    final ids = <String>{for (final e in raw) '$e'};
+    final unknown = ids.where((id) => !known.contains(id));
+    if (unknown.isNotEmpty) {
+      throw ApiError(400, 'invalid_$key', 'Unknown: ${unknown.join(', ')}');
+    }
+    return ids.toList();
+  }
+
+  Set<String> get _serverIds => {for (final s in store.state.servers) s.id};
+  Set<String> get _portalIds => {for (final p in store.state.portals) p.id};
+
   Future<Response> _members(
     Request request,
     String method,
     List<String> parts,
   ) async {
     final state = store.state;
+    final access = _access(request);
+    final who = request.context['who'] as Principal;
     if (parts.length == 1 && method == 'GET') {
       return _json(200, [for (final m in state.members) m.toJson()]);
     }
-    if (parts.length == 2 && method == 'DELETE') {
+    if (parts.length == 2 && (method == 'DELETE' || method == 'PUT')) {
       final id = Uri.decodeComponent(parts[1]);
-      if (state.members.every((m) => m.id != id)) {
-        throw ApiError(404, 'not_found');
+      final target =
+          state.members.where((m) => m.id == id).firstOrNull ??
+          (throw ApiError(404, 'not_found'));
+      if (who.kind == 'member' && who.id == id) {
+        throw ApiError(
+          409,
+          'cannot_edit_self',
+          'Ask someone else to change or remove your own access.',
+        );
       }
-      // Their sessions go with them (the table cascades, the memory does not).
+      // Nobody can touch someone who can do more than they can.
+      final current =
+          state.role(target.role) ??
+          const Role(id: '', name: '', permissions: {});
+      if (!access.canManageMember(current)) {
+        throw ApiError(
+          403,
+          'cannot_edit_higher',
+          'That member can do more than you can.',
+        );
+      }
+      if (method == 'DELETE') {
+        // Their sessions go with them (the table cascades, the memory does not).
+        await store.update((s) {
+          s.sessions.removeWhere((x) => x.memberId == id);
+          s.members.removeWhere((m) => m.id == id);
+        });
+        return Response(204);
+      }
+      final body = await _body(request);
+      final role = _roleOrThrow('${body['role'] ?? target.role}');
+      final servers = _scopeFrom(
+        body,
+        'serverIds',
+        _serverIds,
+        target.serverIds,
+      );
+      final portals = _scopeFrom(
+        body,
+        'portalIds',
+        _portalIds,
+        target.portalIds,
+      );
+      if (!access.canGrant(role, servers, portals)) {
+        throw ApiError(
+          403,
+          'cannot_grant',
+          'You cannot give more access than you have.',
+        );
+      }
+      final saved = target.withAccess(
+        role: role.id,
+        serverIds: servers,
+        portalIds: portals,
+      );
       await store.update((s) {
-        s.sessions.removeWhere((x) => x.memberId == id);
-        s.members.removeWhere((m) => m.id == id);
+        final i = s.members.indexWhere((m) => m.id == id);
+        if (i >= 0) s.members[i] = saved;
       });
-      return Response(204);
+      return _json(200, saved.toJson());
     }
     throw ApiError(404, 'not_found');
+  }
+
+  Json _roleJson(Role r) => {
+    ...r.toJson(),
+    'members': store.state.members.where((m) => m.role == r.id).length,
+    'invites': store.state.invites
+        .where((i) => i.role == r.id && i.pending(_now()))
+        .length,
+  };
+
+  Set<String> _permissionsFrom(Json body, Access access) {
+    final raw = body['permissions'];
+    if (raw is! List) {
+      throw ApiError(400, 'invalid_permissions', 'permissions is a list');
+    }
+    final set = {for (final e in raw) '$e'};
+    final unknown = set.where((p) => !allPermissionIds.contains(p));
+    if (unknown.isNotEmpty) {
+      throw ApiError(
+        400,
+        'invalid_permissions',
+        'Unknown: ${unknown.join(', ')}',
+      );
+    }
+    if (!access.permissions.containsAll(set)) {
+      throw ApiError(
+        403,
+        'cannot_grant',
+        'You cannot give permissions you do not have.',
+      );
+    }
+    return set;
+  }
+
+  Future<Response> _roles(
+    Request request,
+    String method,
+    List<String> parts,
+  ) async {
+    final state = store.state;
+    final access = _access(request);
+    if (parts.length == 1 && method == 'GET') {
+      return _json(200, [
+        for (final r in [...builtinRoles, ...state.roles]) _roleJson(r),
+      ]);
+    }
+    if (parts.length == 1 && method == 'POST') {
+      final body = await _body(request);
+      final name = '${body['name'] ?? ''}'.trim();
+      if (name.isEmpty) throw ApiError(400, 'invalid_name', 'name is required');
+      final id = body['id'] is String && '${body['id']}'.isNotEmpty
+          ? '${body['id']}'.trim().toLowerCase()
+          : slugify(name);
+      if (!_slugPattern.hasMatch(id)) {
+        throw ApiError(
+          400,
+          'invalid_id',
+          'Use lowercase letters, numbers and hyphens',
+        );
+      }
+      if (state.role(id) != null) throw ApiError(409, 'role_id_in_use');
+      final role = Role(
+        id: id,
+        name: name,
+        description: '${body['description'] ?? ''}'.trim(),
+        permissions: _permissionsFrom(body, access),
+        createdAt: _now(),
+      );
+      await store.update((s) => s.roles.add(role));
+      return _json(201, _roleJson(role));
+    }
+    if (parts.length == 2) {
+      final id = parts[1];
+      final role = state.role(id) ?? (throw ApiError(404, 'role_not_found'));
+      if (method == 'GET') return _json(200, _roleJson(role));
+      if (role.builtin) {
+        throw ApiError(
+          409,
+          'builtin_role',
+          'Built-in roles cannot be changed. Make a new role instead.',
+        );
+      }
+      if (!access.permissions.containsAll(role.permissions)) {
+        throw ApiError(
+          403,
+          'cannot_edit_higher',
+          'That role can do more than you can.',
+        );
+      }
+      if (method == 'PUT') {
+        final body = await _body(request);
+        final name = body.containsKey('name')
+            ? '${body['name']}'.trim()
+            : role.name;
+        if (name.isEmpty) {
+          throw ApiError(400, 'invalid_name', 'name is required');
+        }
+        final saved = role.copyWith(
+          name: name,
+          description: body.containsKey('description')
+              ? '${body['description']}'.trim()
+              : null,
+          permissions: body.containsKey('permissions')
+              ? _permissionsFrom(body, access)
+              : null,
+        );
+        await store.update((s) {
+          final i = s.roles.indexWhere((r) => r.id == id);
+          if (i >= 0) s.roles[i] = saved;
+        });
+        return _json(200, _roleJson(saved));
+      }
+      if (method == 'DELETE') {
+        final inUse =
+            state.members.any((m) => m.role == id) ||
+            state.invites.any((i) => i.role == id && i.pending(_now())) ||
+            state.authProviders.any((p) => p.defaultRole == id);
+        if (inUse) {
+          throw ApiError(
+            409,
+            'role_in_use',
+            'Members, invitations or a sign-in provider still use this role.',
+          );
+        }
+        await store.update((s) => s.roles.removeWhere((r) => r.id == id));
+        return Response(204);
+      }
+    }
+    throw ApiError(405, 'method_not_allowed');
+  }
+
+  Future<Response> _invites(
+    Request request,
+    String method,
+    List<String> parts,
+  ) async {
+    final state = store.state;
+    final access = _access(request);
+    final who = request.context['who'] as Principal;
+    if (parts.length == 1 && method == 'GET') {
+      final now = _now();
+      final list = [...state.invites]
+        ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      return _json(200, [for (final i in list) i.toPublicJson(now)]);
+    }
+    if (parts.length == 1 && method == 'POST') {
+      final body = await _body(request);
+      final role = _roleOrThrow('${body['role'] ?? ''}');
+      final servers = _scopeFrom(body, 'serverIds', _serverIds, null);
+      final portals = _scopeFrom(body, 'portalIds', _portalIds, null);
+      if (!access.canGrant(role, servers, portals)) {
+        throw ApiError(
+          403,
+          'cannot_grant',
+          'You cannot give more access than you have.',
+        );
+      }
+      String? email;
+      final rawEmail = body['email'];
+      if (rawEmail is String && rawEmail.trim().isNotEmpty) {
+        email = rawEmail.trim().toLowerCase();
+        if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)) {
+          throw ApiError(
+            400,
+            'invalid_email',
+            '"$rawEmail" is not an email address',
+          );
+        }
+      }
+      String? returnTo;
+      final rawReturn = body['returnTo'];
+      if (rawReturn is String && rawReturn.isNotEmpty) {
+        returnTo =
+            login.safeReturn(rawReturn) ??
+            (throw ApiError(
+              400,
+              'invalid_return_to',
+              'That address is not one this server allows.',
+            ));
+      }
+      final days = body['expiresInDays'] is int
+          ? (body['expiresInDays'] as int).clamp(1, 60)
+          : 7;
+      final token = randomSecret(prefix: 'mcpi_', bytes: 24);
+      final now = _now();
+      final invite = Invite(
+        id: newId('inv'),
+        hash: hashSecret(token),
+        email: email,
+        role: role.id,
+        serverIds: servers,
+        portalIds: portals,
+        returnTo: returnTo,
+        createdBy: who.name,
+        createdAt: now,
+        expiresAt: now.add(Duration(days: days)),
+      );
+      await store.update((s) => s.invites.add(invite));
+      // The link holds the only copy of the token: it is shown once.
+      return _json(201, {
+        ...invite.toPublicJson(now),
+        'token': token,
+        'url': '${baseUrl(request)}/auth/invite/$token',
+      });
+    }
+    if (parts.length == 2 && method == 'DELETE') {
+      final id = parts[1];
+      if (state.invites.every((i) => i.id != id)) {
+        throw ApiError(404, 'not_found');
+      }
+      await store.update((s) => s.invites.removeWhere((i) => i.id == id));
+      return Response(204);
+    }
+    throw ApiError(405, 'method_not_allowed');
   }
 
   Json _providerJson(AuthProviderConfig p, Request request) =>
@@ -251,7 +719,13 @@ class AdminApi {
         final id = body['id'] is String && '${body['id']}'.isNotEmpty
             ? '${body['id']}'.trim().toLowerCase()
             : slugify(name.isEmpty ? kind : name);
-        final saved = await _saveProvider(id, kind, body, creating: true);
+        final saved = await _saveProvider(
+          id,
+          kind,
+          body,
+          _access(request),
+          creating: true,
+        );
         return _json(201, _providerJson(saved, request));
       }
     } else if (parts.length == 3) {
@@ -269,7 +743,12 @@ class AdminApi {
       if (method == 'PUT') {
         if (current == null) throw ApiError(404, 'provider_not_found');
         final body = await _body(request);
-        final saved = await _saveProvider(id, current.kind, body);
+        final saved = await _saveProvider(
+          id,
+          current.kind,
+          body,
+          _access(request),
+        );
         return _json(200, _providerJson(saved, request));
       }
       if (method == 'DELETE') {
@@ -299,7 +778,8 @@ class AdminApi {
   Future<AuthProviderConfig> _saveProvider(
     String id,
     String kind,
-    Json body, {
+    Json body,
+    Access access, {
     bool creating = false,
   }) async {
     if (!_slugPattern.hasMatch(id) || reservedProviderIds.contains(id)) {
@@ -352,6 +832,19 @@ class AdminApi {
       }
     }
 
+    String? defaultRole;
+    if (body['defaultRole'] is String) {
+      final role = _roleOrThrow('${body['defaultRole']}');
+      if (!access.canGrant(role, null, null)) {
+        throw ApiError(
+          403,
+          'cannot_grant',
+          'You cannot give more access than you have.',
+        );
+      }
+      defaultRole = role.id;
+    }
+
     final name = body['name'] is String && '${body['name']}'.trim().isNotEmpty
         ? '${body['name']}'.trim()
         : null;
@@ -378,6 +871,7 @@ class AdminApi {
               users: kind == 'github' ? list('users') : null,
               domains: domains,
               emails: emails,
+              defaultRole: defaultRole,
             );
     if (next.enabled && !next.configured) {
       // Turning on something with no client id and secret would offer a button
@@ -420,7 +914,11 @@ class AdminApi {
     }
     if (parts.length == 1) {
       if (method == 'GET') {
-        return _json(200, [for (final s in state.servers) s.toPublicJson()]);
+        final access = _access(request);
+        return _json(200, [
+          for (final s in state.servers)
+            if (access.canServer(s.id)) s.toPublicJson(),
+        ]);
       }
       if (method == 'POST') {
         final body = await _body(request);
@@ -731,9 +1229,10 @@ class AdminApi {
   /// The tools of every enabled server, so the dashboard loads them in one go.
   Future<Response> _allTools(Request request) async {
     final refresh = request.url.queryParameters['refresh'] == '1';
+    final access = _access(request);
     final servers = [
       for (final s in store.state.servers)
-        if (s.enabled) s,
+        if (s.enabled && access.canServer(s.id)) s,
     ];
     final catalogs = await Future.wait([
       for (final s in servers) pool.catalog(s, refresh: refresh),
@@ -751,20 +1250,17 @@ class AdminApi {
     String method,
     List<String> parts,
   ) async {
-    if (parts.length == 1 && method == 'GET') {
-      return _json(200, {
-        'servers': {
-          for (final e in health.snapshot.entries) e.key: e.value.toJson(),
-        },
-      });
-    }
+    final access = _access(request);
+    Json snapshot() => {
+      'servers': {
+        for (final e in health.snapshot.entries)
+          if (access.canServer(e.key)) e.key: e.value.toJson(),
+      },
+    };
+    if (parts.length == 1 && method == 'GET') return _json(200, snapshot());
     if (parts.length == 2 && parts[1] == 'check' && method == 'POST') {
       await health.checkAll();
-      return _json(200, {
-        'servers': {
-          for (final e in health.snapshot.entries) e.key: e.value.toJson(),
-        },
-      });
+      return _json(200, snapshot());
     }
     throw ApiError(405, 'method_not_allowed');
   }
@@ -1105,8 +1601,10 @@ class AdminApi {
     final state = store.state;
     if (parts.length == 1) {
       if (method == 'GET') {
+        final access = _access(request);
         return _json(200, [
-          for (final p in state.portals) _portalJson(p, request),
+          for (final p in state.portals)
+            if (access.canPortal(p.id)) _portalJson(p, request),
         ]);
       }
       if (method == 'POST') {

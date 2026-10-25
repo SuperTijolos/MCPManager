@@ -48,6 +48,7 @@ The image is a single static program on an empty base, runs as an unprivileged u
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | none | A GitHub OAuth app. Turns on "Sign in with GitHub" (see below). |
 | `DASHBOARD_GITHUB_ORGS` | none | Comma-separated organisations whose members may sign in. |
 | `DASHBOARD_GITHUB_USERS` | none | Comma-separated GitHub logins that may sign in without belonging to those organisations. |
+| `DASHBOARD_DEFAULT_ROLE` | `admin` | The role people let in by those two lists start with (`admin`, `operator`, `viewer` or a role you made). |
 | `PORTAL_SESSION_DAYS` | `7` | How long a sign-in lasts. |
 | `PORTAL_HEALTH_SECONDS` | `60` | How often upstream servers are checked (`0` turns it off). |
 | `GITHUB_URL`, `GITHUB_API_URL` | github.com | Only for GitHub Enterprise Server. |
@@ -70,6 +71,19 @@ The server asks for the profile and, on GitHub, organisations and verified email
 The list is checked on every request, so removing an entry or turning a provider off locks people out at once. Removing someone from GitHub takes effect at their next sign-in (at most `PORTAL_SESSION_DAYS` later), or immediately if you delete them under `/api/members`.
 
 **From the environment.** `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `DASHBOARD_GITHUB_ORGS` and `DASHBOARD_GITHUB_USERS` still work and appear as a read-only *GitHub* provider (marked "Set by the server"); that is the way to have sign-in from the first start, before anyone can open Settings.
+
+### Members, roles and invitations
+
+Signing in is not the same as being allowed to do things. Every member has a **role**, a set of permissions, and can be limited to some servers or portals. Manage them in the dashboard under **Settings → Members** and **Settings → Roles**.
+
+* **Roles.** `admin` (everything), `operator` (servers, tools, portals, tokens, audit; no access management) and `viewer` (read-only) are built in. Make your own from these permissions:
+  `servers.view`, `servers.manage`, `tools.view`, `tools.call`, `rules.manage`, `portals.view`, `portals.manage`, `tokens.manage`, `audit.view`, `audit.manage`, `chats.use`, `llm.manage`, `members.view`, `members.manage`, `roles.manage`, `providers.manage`.
+  A role is looked up on every request, so changing it applies at once, and the dashboard hides what a role cannot use.
+* **Limits.** A member can be limited to chosen servers and portals (the others are invisible to them). Actions that affect everything need access to all of them: creating servers, tool rules, the audit log and access tokens need all servers and portals; changing a portal needs all servers, because a portal can publish any of them.
+* **Nobody can give more than they have.** A role, an invitation or a sign-in provider's default role can only carry permissions the person making it holds, and a limited person cannot lift a limit. You cannot change or remove yourself, or someone who can manage access in ways you cannot. The admin token is outside all of this.
+* **Who starts as what.** People let in by a provider's list get that provider's *default role* (new providers start as `viewer`). The GitHub app from the environment gives `admin`, as it always did, unless `DASHBOARD_DEFAULT_ROLE` says otherwise. A member keeps their role when they sign in again.
+* **Invitations.** Under Members, *Invite* makes a link for a role (and limits), valid for 1, 7 or 30 days and usable once. Made out to an email address, it works only for an account with that *verified* address; and that address needs no link at all: signing in with it is enough. An invitation lets someone in whatever the provider's list says, and they stay in until removed (turning their provider off still locks them out). The link is shown once; only its hash is stored.
+* **Live changes.** The event stream only sends audit events to members who may read the audit log, and health or sign-in events to those who may see that server.
 
 The admin token keeps working next to this, for scripts and for first set-up. When a web connector (Claude, ChatGPT) asks to be connected, the consent page offers a *Sign in with …* button for each provider as well as the admin token.
 
@@ -106,6 +120,7 @@ All admin routes need `Authorization: Bearer <admin token or session token>` and
 | Route | |
 |---|---|
 | `GET /health` | Liveness, no credential. |
+| `GET /auth/invite/{token}` | The page an invitation link opens: who invited you, as what, and a button per sign-in provider. |
 | `GET /auth/config` | The sign-in providers that are on (`providers: [{id, kind, name}]`), no credential. |
 | `GET /auth/<id>?return_to=` | Starts the sign-in through provider `<id>` (`github`, `google`, …); the provider returns to `/auth/<id>/callback`. `return_to` is a path on the server, or an address of an allowed origin (that one gets `#session=<token>`). |
 | `GET /api/me`, `POST /api/logout` | Who is calling; end this session. |
@@ -122,6 +137,9 @@ All admin routes need `Authorization: Bearer <admin token or session token>` and
 | `GET/POST /api/servers`, `GET/PUT/DELETE /api/servers/{id}` | Upstream servers. `PUT` creates under the id you choose. Header values are never returned, only their names. |
 | `POST /api/servers/{id}/test`, `GET /api/servers/{id}/tools` | Connect and list tools. |
 | `GET/POST /api/auth/providers`, `GET/PUT/DELETE /api/auth/providers/{id}` | Sign-in providers: `kind` (`github`/`google`), `name`, `clientId`, `clientSecret` (write-only: omitted keeps it, empty clears it), `enabled`, `orgs`, `users`, `domains`, `emails`. The environment's GitHub app is listed read-only. |
+| `GET /api/permissions`, `GET/POST /api/roles`, `GET/PUT/DELETE /api/roles/{id}` | The permission catalogue, and roles (`name`, `description`, `permissions`). Built-in roles cannot be changed; a role in use cannot be deleted. |
+| `GET/POST /api/invites`, `DELETE /api/invites/{id}` | Invitations (`role`, `email`, `serverIds`, `portalIds`, `expiresInDays`, `returnTo`). The create response carries the one-time `url`. |
+| `PUT/DELETE /api/members/{id}` | Change a member's `role`, `serverIds` and `portalIds` (null means all), or remove them. |
 | `GET/POST /api/portals`, `GET/PUT/DELETE /api/portals/{id}` | Portals (`name`, `slug`, `description`, `enabled`, `servers`, `excludedTools`). |
 | `GET /api/portals/{id}/tools?includeHidden=1&refresh=1` | The tools the portal exposes, with hidden and excluded ones on request. |
 | `GET/POST /api/tokens`, `DELETE /api/tokens/{id}` | Access tokens; `POST` returns the secret once. |

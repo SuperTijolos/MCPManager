@@ -14,6 +14,7 @@ class GatewayConfig {
     this.githubClientSecret,
     List<String>? githubOrgs,
     List<String>? githubUsers,
+    this.defaultRole = 'admin',
     this.githubUrl = 'https://github.com',
     this.githubApiUrl = 'https://api.github.com',
     this.googleAuthUrl = 'https://accounts.google.com/o/oauth2/v2/auth',
@@ -55,6 +56,10 @@ class GatewayConfig {
   /// With both empty nobody can.
   final List<String> githubOrgs;
   final List<String> githubUsers;
+
+  /// The role the environment's GitHub list gives people (`admin` keeps what
+  /// that list always meant).
+  final String defaultRole;
 
   /// Change both for GitHub Enterprise Server.
   final String githubUrl;
@@ -102,6 +107,9 @@ class GatewayConfig {
       githubClientSecret: e['GITHUB_CLIENT_SECRET'],
       githubOrgs: csv(e['DASHBOARD_GITHUB_ORGS']),
       githubUsers: csv(e['DASHBOARD_GITHUB_USERS']),
+      defaultRole: (e['DASHBOARD_DEFAULT_ROLE'] ?? '').trim().isEmpty
+          ? 'admin'
+          : e['DASHBOARD_DEFAULT_ROLE']!.trim(),
       githubUrl: (e['GITHUB_URL'] ?? 'https://github.com').replaceAll(
         RegExp(r'/+$'),
         '',

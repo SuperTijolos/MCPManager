@@ -27,7 +27,7 @@ credentials never leave the server.
 ## Data
 
 `members`, `servers`, `server_credentials`, `tool_rules`, `tool_overrides`,
-`auth_providers`, `auth_provider_secrets`, `portals`, `access_tokens`, `oauth_clients`, `oauth_grants`, `audit_events`,
+`auth_providers`, `auth_provider_secrets`, `roles`, `invites`, `portals`, `access_tokens`, `oauth_clients`, `oauth_grants`, `audit_events`,
 `settings`, `sessions`, `server_oauth`, `chats`, `chat_content`, `llm_providers`
 and `llm_provider_secrets`.
 
@@ -48,7 +48,12 @@ instance is the writer.
 
 1. The dashboard sends the user to the server's `/auth/<provider>`; the provider (GitHub or Google, set up under Settings → Sign-in and stored in `auth_providers`, with the secret in `auth_provider_secrets`) returns to the server, which exchanges the code, reads the profile (and GitHub organisations and verified emails), and checks them against that provider's allow-list. The server's environment can still provide a read-only GitHub provider (`GITHUB_*`, `DASHBOARD_GITHUB_*`).
 2. Allowed users become rows in `members` and get a session token for the
-   dashboard. Real user accounts later are more rows in `members` with a role.
+   dashboard. A member has a role (built in or custom, a set of permissions)
+   and optionally a list of servers and portals they are limited to. The
+   server works their access out from the role on every request; the
+   dashboard only uses it to decide what to offer. An invitation (a one-time
+   link, or an email address) lets someone in with a role without being on a
+   provider's list.
 3. Portal OAuth consent (for MCP clients) uses the same sign-in instead of
    pasting the admin token.
 4. The admin token stays as a bootstrap / headless credential.

@@ -9,6 +9,7 @@ export 'src/config.dart';
 export 'src/events.dart' show EventBus, GatewayEvent;
 export 'src/mcp_endpoint.dart' show gatewayVersion, supportedProtocolVersions;
 export 'src/models.dart';
+export 'src/permissions.dart';
 export 'src/security.dart' show hashSecret, pkceS256;
 export 'src/server.dart';
 export 'src/state.dart';
