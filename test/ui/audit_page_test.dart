@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:mcp_manager/ui/widgets.dart' show CodeBlock;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mcp_manager/engine/audit/audit_log.dart';
 import 'package:mcp_manager/engine/audit/audit_models.dart';
@@ -155,8 +156,38 @@ void main() {
       },
     );
 
+    testWidgets('the audit-only values are labelled lines, not one sentence', (
+      tester,
+    ) async {
+      final c = await pumpApp(tester);
+      await seedAudit(gatewayOf(c), [
+        AuditEvent(
+          id: 'why',
+          timestamp: DateTime.now(),
+          kind: AuditKind.toolCall,
+          status: AuditStatus.success,
+          source: AuditSource.portal,
+          actor: 'ChatGPT',
+          serverName: 'Docs',
+          toolName: 'lookup',
+          args: '{"q":"x","reason":"user asked","expected_result":"a page"}',
+          forwarded: '{"q":"x"}',
+          context: '{"reason":"user asked","expected_result":"a page"}',
+          result: 'found x',
+        ),
+      ]);
+      await c.read(auditLogProvider.notifier).reload();
+      await goTo(tester, '/audit');
+
+      expect(find.text('Reason'), findsOneWidget);
+      expect(find.text('user asked'), findsOneWidget);
+      expect(find.text('Expected result'), findsOneWidget);
+      expect(find.text('a page'), findsOneWidget);
+      expect(find.textContaining('reason: user asked'), findsNothing);
+    });
+
     testWidgets(
-      'a reshaped call shows what the model sent, what was forwarded and the audit-only reason',
+      'the detail shows the why apart from the arguments, with coloured JSON',
       (tester) async {
         final c = await pumpApp(tester);
         await seedAudit(gatewayOf(c), [
@@ -178,21 +209,108 @@ void main() {
         await c.read(auditLogProvider.notifier).reload();
         await goTo(tester, '/audit');
 
-        expect(
-          find.textContaining('reason: user asked'),
-          findsOneWidget,
-          reason: 'the why is visible collapsed',
-        );
         await tester.tap(find.text('Docs · lookup'));
         await tester.pumpAndSettle();
         expect(find.byType(Dialog), findsOneWidget, reason: 'opens the detail');
+        expect(find.text('Why'), findsOneWidget);
+        expect(find.text('Arguments'), findsOneWidget);
+        expect(
+          find.text('Forwarded to the server'),
+          findsNothing,
+          reason: 'the same as the arguments once the why is set aside',
+        );
+        expect(find.text('reshaped by rules'), findsOneWidget);
+        expect(find.text('Result'), findsWidgets);
+        expect(
+          find.byWidgetPredicate((w) => w is CodeBlock && w.json),
+          findsWidgets,
+          reason: 'the arguments are coloured JSON',
+        );
+
+        // The complete JSON, nothing left out, is one tab away.
+        await tester.tap(find.byKey(const ValueKey('audit-tab-raw')));
+        await tester.pumpAndSettle();
         expect(find.text('Arguments from the model'), findsOneWidget);
         expect(find.text('Forwarded to the server'), findsOneWidget);
-        expect(find.textContaining('Audit-only context'), findsOneWidget);
-        expect(find.text('reshaped by rules'), findsOneWidget);
-        expect(find.text('Result'), findsOneWidget);
+        expect(find.text('Audit-only context'), findsOneWidget);
+        expect(find.text('The whole event'), findsOneWidget);
+        expect(
+          find.textContaining('"reason": "user asked"'),
+          findsWidgets,
+          reason: 'the model\'s own arguments are whole here',
+        );
       },
     );
+
+    testWidgets('values a rule injected are shown as what was forwarded', (
+      tester,
+    ) async {
+      final c = await pumpApp(tester);
+      await seedAudit(gatewayOf(c), [
+        AuditEvent(
+          id: 'injected',
+          timestamp: DateTime.now(),
+          kind: AuditKind.toolCall,
+          status: AuditStatus.success,
+          source: AuditSource.portal,
+          actor: 'ChatGPT',
+          serverName: 'Docs',
+          toolName: 'lookup',
+          args: '{"q":"x"}',
+          forwarded: '{"q":"x","tenant":"acme"}',
+          result: 'found x',
+        ),
+      ]);
+      await c.read(auditLogProvider.notifier).reload();
+      await goTo(tester, '/audit');
+      await tester.tap(find.text('Docs · lookup'));
+      await tester.pumpAndSettle();
+      expect(find.text('Arguments from the model'), findsOneWidget);
+      expect(find.text('Forwarded to the server'), findsOneWidget);
+      expect(find.text('Why'), findsNothing);
+    });
+
+    testWidgets('filters by server and by portal', (tester) async {
+      final c = await pumpApp(tester);
+      AuditEvent call(String id, String server, String portal) => AuditEvent(
+        id: id,
+        timestamp: DateTime.now(),
+        kind: AuditKind.toolCall,
+        status: AuditStatus.success,
+        source: AuditSource.portal,
+        actor: 'ChatGPT',
+        serverId: 'srv-$server',
+        serverName: server,
+        toolName: 'lookup',
+        portalSlug: portal,
+        result: 'ok',
+      );
+      await seedAudit(gatewayOf(c), [
+        call('1', 'Docs', 'work'),
+        call('2', 'Code', 'home'),
+        call('3', 'Code', 'work'),
+      ]);
+      await c.read(auditLogProvider.notifier).reload();
+      await goTo(tester, '/audit');
+      expect(find.text('Docs · lookup'), findsOneWidget);
+      expect(find.text('Code · lookup'), findsNWidgets(2));
+
+      await tester.tap(find.byKey(const ValueKey('audit-portal')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('home').last);
+      await tester.pumpAndSettle();
+      expect(find.text('Code · lookup'), findsOneWidget);
+      expect(find.text('Docs · lookup'), findsNothing);
+
+      await tester.tap(find.text('Reset filters'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('audit-server')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Docs').last);
+      await tester.pumpAndSettle();
+      expect(find.text('Docs · lookup'), findsOneWidget);
+      expect(find.text('Code · lookup'), findsNothing);
+    });
 
     testWidgets('MCP tool calls and activity are separate views', (
       tester,

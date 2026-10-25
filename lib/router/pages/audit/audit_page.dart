@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -13,6 +15,7 @@ import '../../../engine/core/json.dart';
 import '../../../engine/core/redact.dart' show previewWasShortened, redacted;
 import '../../../engine/mcp/mcp_hub.dart';
 import '../../../engine/rules/tool_rules.dart' show toolKey;
+import '../../../ui/context_fields.dart';
 import '../../../ui/download.dart';
 import '../../../ui/pagination.dart';
 import '../../../ui/preview_section.dart';
@@ -139,6 +142,7 @@ class _AuditPageState extends ConsumerState<AuditPage> {
   AuditKind? _kind;
   _Range _range = _Range.any;
   String? _server;
+  String? _portal;
   String? _tool;
   int _page = 0;
   int _pageSize = 25;
@@ -156,6 +160,7 @@ class _AuditPageState extends ConsumerState<AuditPage> {
       _kind != null ||
       _range != _Range.any ||
       _server != null ||
+      _portal != null ||
       _tool != null;
 
   /// Any filter change goes back to the first page.
@@ -168,6 +173,7 @@ class _AuditPageState extends ConsumerState<AuditPage> {
     _view = view;
     _kind = null;
     _server = null;
+    _portal = null;
     _tool = null;
   });
 
@@ -197,6 +203,7 @@ class _AuditPageState extends ConsumerState<AuditPage> {
             (_source == null || e.source == _source) &&
             (since == null || e.timestamp.isAfter(since)) &&
             (_server == null || _serverKey(e) == _server) &&
+            (_portal == null || e.portalSlug == _portal) &&
             (_tool == null || e.toolName == _tool) &&
             (_query.isEmpty || _matches(e, _query)))
           e,
@@ -207,6 +214,10 @@ class _AuditPageState extends ConsumerState<AuditPage> {
         if (_serverKey(e) != null)
           _serverKey(e)!: e.serverName ?? _serverKey(e)!,
     };
+    final portals = <String>{
+      for (final e in inView)
+        if (e.portalSlug != null) e.portalSlug!,
+    }.toList()..sort();
     final tools = <String>{
       for (final e in inView)
         if (e.toolName != null &&
@@ -240,6 +251,82 @@ class _AuditPageState extends ConsumerState<AuditPage> {
       }
       entries.add(row);
     }
+
+    final narrow = MediaQuery.sizeOf(context).width < 640;
+    // The filters that pick from a list. On a phone they sit in one row that
+    // scrolls sideways, so they cannot push the list off the screen.
+    final dropdowns = <Widget>[
+      if (_view == _View.activity)
+        DropdownButton<AuditKind?>(
+          value: _kind,
+          hint: const Text('Type'),
+          underline: const SizedBox.shrink(),
+          items: [
+            const DropdownMenuItem(value: null, child: Text('All activity')),
+            for (final k in _View.activity.kinds)
+              DropdownMenuItem(value: k, child: Text(_kindLabel(k))),
+          ],
+          onChanged: (v) => _filter(() => _kind = v),
+        ),
+      DropdownButton<_Range>(
+        key: const ValueKey('audit-range'),
+        value: _range,
+        underline: const SizedBox.shrink(),
+        items: [
+          for (final r in _Range.values)
+            DropdownMenuItem(value: r, child: Text(r.label)),
+        ],
+        onChanged: (v) => _filter(() => _range = v ?? _Range.any),
+      ),
+      if (servers.isNotEmpty || _server != null)
+        DropdownButton<String?>(
+          key: const ValueKey('audit-server'),
+          value: servers.containsKey(_server) ? _server : null,
+          underline: const SizedBox.shrink(),
+          items: [
+            const DropdownMenuItem(value: null, child: Text('All servers')),
+            for (final e in servers.entries)
+              DropdownMenuItem(value: e.key, child: Text(e.value)),
+          ],
+          onChanged: (v) => _filter(() {
+            _server = v;
+            _tool = null;
+          }),
+        ),
+      if (portals.isNotEmpty || _portal != null)
+        DropdownButton<String?>(
+          key: const ValueKey('audit-portal'),
+          value: portals.contains(_portal) ? _portal : null,
+          underline: const SizedBox.shrink(),
+          items: [
+            const DropdownMenuItem(value: null, child: Text('All portals')),
+            for (final p in portals) DropdownMenuItem(value: p, child: Text(p)),
+          ],
+          onChanged: (v) => _filter(() => _portal = v),
+        ),
+      if (_view == _View.tools && (tools.length > 1 || _tool != null))
+        DropdownButton<String?>(
+          key: const ValueKey('audit-tool'),
+          value: tools.contains(_tool) ? _tool : null,
+          underline: const SizedBox.shrink(),
+          items: [
+            const DropdownMenuItem(value: null, child: Text('All tools')),
+            for (final t in tools) DropdownMenuItem(value: t, child: Text(t)),
+          ],
+          onChanged: (v) => _filter(() => _tool = v),
+        ),
+      DropdownButton<AuditSource?>(
+        value: _source,
+        hint: const Text('Source'),
+        underline: const SizedBox.shrink(),
+        items: [
+          const DropdownMenuItem(value: null, child: Text('All sources')),
+          for (final s in AuditSource.values)
+            DropdownMenuItem(value: s, child: Text(sourceLabel(s))),
+        ],
+        onChanged: (v) => _filter(() => _source = v),
+      ),
+    ];
 
     return PageScaffold(
       title: 'Audit log',
@@ -323,78 +410,7 @@ class _AuditPageState extends ConsumerState<AuditPage> {
                   selected: _status == s,
                   onSelected: (on) => _filter(() => _status = on ? s : null),
                 ),
-              if (_view == _View.activity)
-                DropdownButton<AuditKind?>(
-                  value: _kind,
-                  hint: const Text('Type'),
-                  underline: const SizedBox.shrink(),
-                  items: [
-                    const DropdownMenuItem(
-                      value: null,
-                      child: Text('All activity'),
-                    ),
-                    for (final k in _View.activity.kinds)
-                      DropdownMenuItem(value: k, child: Text(_kindLabel(k))),
-                  ],
-                  onChanged: (v) => _filter(() => _kind = v),
-                ),
-              DropdownButton<_Range>(
-                key: const ValueKey('audit-range'),
-                value: _range,
-                underline: const SizedBox.shrink(),
-                items: [
-                  for (final r in _Range.values)
-                    DropdownMenuItem(value: r, child: Text(r.label)),
-                ],
-                onChanged: (v) => _filter(() => _range = v ?? _Range.any),
-              ),
-              if (servers.length > 1 || _server != null)
-                DropdownButton<String?>(
-                  key: const ValueKey('audit-server'),
-                  value: servers.containsKey(_server) ? _server : null,
-                  underline: const SizedBox.shrink(),
-                  items: [
-                    const DropdownMenuItem(
-                      value: null,
-                      child: Text('All servers'),
-                    ),
-                    for (final e in servers.entries)
-                      DropdownMenuItem(value: e.key, child: Text(e.value)),
-                  ],
-                  onChanged: (v) => _filter(() {
-                    _server = v;
-                    _tool = null;
-                  }),
-                ),
-              if (_view == _View.tools && (tools.length > 1 || _tool != null))
-                DropdownButton<String?>(
-                  key: const ValueKey('audit-tool'),
-                  value: tools.contains(_tool) ? _tool : null,
-                  underline: const SizedBox.shrink(),
-                  items: [
-                    const DropdownMenuItem(
-                      value: null,
-                      child: Text('All tools'),
-                    ),
-                    for (final t in tools)
-                      DropdownMenuItem(value: t, child: Text(t)),
-                  ],
-                  onChanged: (v) => _filter(() => _tool = v),
-                ),
-              DropdownButton<AuditSource?>(
-                value: _source,
-                hint: const Text('Source'),
-                underline: const SizedBox.shrink(),
-                items: [
-                  const DropdownMenuItem(
-                    value: null,
-                    child: Text('All sources'),
-                  ),
-                  for (final s in AuditSource.values)
-                    DropdownMenuItem(value: s, child: Text(sourceLabel(s))),
-                ],
-                onChanged: (v) => _filter(() => _source = v),
-              ),
+              if (!narrow) ...dropdowns,
               if (_filtered)
                 TextButton.icon(
                   onPressed: () => _filter(() {
@@ -404,6 +420,7 @@ class _AuditPageState extends ConsumerState<AuditPage> {
                     _kind = null;
                     _range = _Range.any;
                     _server = null;
+                    _portal = null;
                     _tool = null;
                   }),
                   icon: const Icon(Icons.filter_alt_off_outlined, size: 18),
@@ -411,6 +428,22 @@ class _AuditPageState extends ConsumerState<AuditPage> {
                 ),
             ],
           ),
+          if (narrow)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    for (final d in dropdowns)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 12),
+                        child: d,
+                      ),
+                  ],
+                ),
+              ),
+            ),
           if (all.length >= auditCapacity)
             Padding(
               padding: const EdgeInsets.only(top: 10),
@@ -510,6 +543,7 @@ class _AuditPageState extends ConsumerState<AuditPage> {
   bool _matches(AuditEvent e, String q) =>
       e.title.toLowerCase().contains(q) ||
       e.actor.toLowerCase().contains(q) ||
+      (e.portalSlug ?? '').toLowerCase().contains(q) ||
       (e.args ?? '').toLowerCase().contains(q) ||
       (e.forwarded ?? '').toLowerCase().contains(q) ||
       (e.context ?? '').toLowerCase().contains(q) ||
@@ -758,14 +792,13 @@ class _EventTile extends StatelessWidget {
   const _EventTile(this.event);
   final AuditEvent event;
 
-  /// The audit-only values the model supplied, as `reason: …` text, so the
-  /// "why" is visible without opening the event.
-  String? get _contextLine {
+  /// The audit-only values the model supplied (reason, expected result, …),
+  /// so the "why" is visible without opening the event.
+  Json? get _contextFields {
     final raw = event.context;
     if (raw == null) return null;
     final decoded = tryDecodeObject(raw);
-    if (decoded == null || decoded.isEmpty) return null;
-    return decoded.entries.map((e) => '${e.key}: ${e.value}').join(' · ');
+    return decoded == null || decoded.isEmpty ? null : decoded;
   }
 
   @override
@@ -774,7 +807,18 @@ class _EventTile extends StatelessWidget {
     final muted = theme.textTheme.bodySmall?.copyWith(
       color: theme.colorScheme.onSurfaceVariant,
     );
-    final contextLine = _contextLine;
+    final outcome = _outcomeLine(event);
+    final contextFields = _contextFields;
+    // Why it was called, then what came of it, in one column of labels.
+    final lines = [
+      if (contextFields != null) ...contextEntries(contextFields),
+      if (outcome != null)
+        LabeledValue(
+          outcome.isError ? 'Error' : 'Result',
+          outcome.text,
+          color: outcome.isError ? StatusColors.bad : null,
+        ),
+    ];
     return Card(
       clipBehavior: Clip.antiAlias,
       child: InkWell(
@@ -801,23 +845,10 @@ class _EventTile extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: muted,
                     ),
-                    if (_outcomeLine(event) case final outcome?)
-                      Text(
-                        outcome.text,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: muted?.copyWith(
-                          color: outcome.isError ? StatusColors.bad : null,
-                        ),
-                      ),
-                    if (contextLine != null)
-                      Text(
-                        contextLine,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.primary,
-                        ),
+                    if (lines.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: ContextFields(lines, compact: true),
                       ),
                   ],
                 ),
@@ -922,6 +953,55 @@ class _AuditDetailDialog extends ConsumerWidget {
     return tryDecodeObject(raw);
   }
 
+  /// The event as recorded, with the JSON texts inside it opened up so it
+  /// reads as one document.
+  Json get _wholeEvent {
+    final json = event.toJson();
+    for (final key in const ['args', 'forwarded', 'context', 'result']) {
+      final value = json[key];
+      if (value is String) {
+        final parsed = parsePreview(value);
+        if (parsed != null) json[key] = parsed;
+      }
+    }
+    return json;
+  }
+
+  /// The audit-only values the model supplied, when there are some.
+  Json? get _contextFields {
+    final raw = event.context;
+    if (raw == null) return null;
+    final decoded = tryDecodeObject(raw);
+    return decoded == null || decoded.isEmpty ? null : decoded;
+  }
+
+  /// What the model sent, without the audit-only values (they are shown as
+  /// "Why"). The text as recorded when it cannot be taken apart.
+  String? get _shownArgs {
+    final raw = event.args;
+    if (raw == null) return null;
+    final context = _contextFields;
+    final decoded = tryDecodeObject(raw);
+    if (context == null || decoded == null) return raw;
+    final rest = {
+      for (final e in decoded.entries)
+        if (!context.containsKey(e.key)) e.key: e.value,
+    };
+    return rest.isEmpty ? null : jsonEncode(rest);
+  }
+
+  /// Whether what the server got is worth a section of its own: rules
+  /// injected or removed something besides the audit-only values.
+  bool get _forwardedDiffers {
+    final forwarded = event.forwarded;
+    if (forwarded == null) return false;
+    final shown = _shownArgs;
+    final a = tryDecodeObject(forwarded);
+    final b = shown == null ? <String, dynamic>{} : tryDecodeObject(shown);
+    if (a == null || b == null) return true;
+    return jsonEncode(a) != jsonEncode(b);
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
@@ -950,157 +1030,266 @@ class _AuditDetailDialog extends ConsumerWidget {
     final muted = theme.textTheme.bodySmall?.copyWith(
       color: theme.colorScheme.onSurfaceVariant,
     );
+    final height = (MediaQuery.sizeOf(context).height * 0.86).clamp(
+      360.0,
+      700.0,
+    );
     return Dialog(
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 720, maxHeight: 640),
+        constraints: BoxConstraints(maxWidth: 720, maxHeight: height),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 12, 12, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
+          child: DefaultTabController(
+            length: 2,
+            child: SizedBox(
+              height: height,
+              child: Column(
+                mainAxisSize: MainAxisSize.max,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(
-                    statusIcon(event.status),
-                    color: statusColor(event.status),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      event.title,
-                      style: theme.textTheme.titleLarge,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: 'Copy as JSON',
-                    icon: const Icon(Icons.copy_outlined),
-                    onPressed: () {
-                      Clipboard.setData(
-                        ClipboardData(text: prettyJson(event.toJson())),
-                      );
-                      showSnack(context, 'Copied this event');
-                    },
-                  ),
-                  IconButton(
-                    tooltip: 'Close',
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.pop(context),
-                  ),
-                ],
-              ),
-              Text(_metaLine(event, withApproval: false), style: muted),
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 8,
-                runSpacing: 4,
-                children: [
-                  StatusChip(event.status.name, statusColor(event.status)),
-                  StatusChip(sourceLabel(event.source), StatusColors.muted),
-                  if (event.approval != null)
-                    StatusChip(
-                      'approval: ${event.approval}',
-                      StatusColors.info,
-                    ),
-                  if (event.forwarded != null)
-                    const StatusChip(
-                      'reshaped by rules',
-                      StatusColors.warn,
-                      icon: Icons.tune,
-                    ),
-                ],
-              ),
-              Flexible(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.only(top: 4, bottom: 8),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  Row(
                     children: [
-                      if (event.args != null)
-                        PreviewSection(
-                          event.forwarded != null
-                              ? 'Arguments from the model'
-                              : 'Arguments',
-                          event.args!,
-                          200,
+                      Icon(
+                        statusIcon(event.status),
+                        color: statusColor(event.status),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          event.title,
+                          style: theme.textTheme.titleLarge,
+                          overflow: TextOverflow.ellipsis,
                         ),
-                      if (event.forwarded != null)
-                        PreviewSection(
-                          'Forwarded to the server',
-                          event.forwarded!,
-                          200,
-                        ),
-                      if (event.context != null)
-                        PreviewSection(
-                          'Audit-only context (not sent to the server)',
-                          event.context!,
-                          140,
-                        ),
-                      if (event.result != null)
-                        PreviewSection('Result', event.result!, 260),
-                      if (event.error != null)
-                        PreviewSection('Error', event.error!, 180),
+                      ),
+                      IconButton(
+                        tooltip: 'Copy as JSON',
+                        icon: const Icon(Icons.copy_outlined),
+                        onPressed: () {
+                          Clipboard.setData(
+                            ClipboardData(text: prettyJson(event.toJson())),
+                          );
+                          showSnack(context, 'Copied this event');
+                        },
+                      ),
+                      IconButton(
+                        tooltip: 'Close',
+                        icon: const Icon(Icons.close),
+                        onPressed: () => Navigator.pop(context),
+                      ),
                     ],
                   ),
-                ),
-              ),
-              if (toolStillThere || chatStillThere)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Wrap(
+                  Text(_metaLine(event, withApproval: false), style: muted),
+                  const SizedBox(height: 10),
+                  Wrap(
                     spacing: 8,
                     runSpacing: 4,
                     children: [
-                      if (toolStillThere)
-                        TextButton.icon(
-                          key: const ValueKey('audit-open-tool'),
-                          onPressed: () => go(
-                            (r) => r.go(
-                              '/mcp-tools',
-                              extra: ToolFocus(
-                                toolKey(event.serverId!, event.toolName!),
-                              ),
-                            ),
-                          ),
-                          icon: const Icon(Icons.build_outlined, size: 18),
-                          label: const Text('Open tool'),
+                      StatusChip(event.status.name, statusColor(event.status)),
+                      StatusChip(sourceLabel(event.source), StatusColors.muted),
+                      if (event.approval != null)
+                        StatusChip(
+                          'approval: ${event.approval}',
+                          StatusColors.info,
                         ),
-                      if (toolStillThere && args != null)
-                        TextButton.icon(
-                          key: const ValueKey('audit-test-again'),
-                          onPressed: () => go(
-                            (r) => r.go(
-                              '/mcp-tools',
-                              extra: ToolFocus(
-                                toolKey(event.serverId!, event.toolName!),
-                                args: args,
-                              ),
-                            ),
-                          ),
-                          icon: const Icon(Icons.replay, size: 18),
-                          label: const Text('Test again'),
+                      if (event.forwarded != null || event.context != null)
+                        const StatusChip(
+                          'reshaped by rules',
+                          StatusColors.warn,
+                          icon: Icons.tune,
                         ),
-                      if (chatStillThere)
-                        TextButton.icon(
-                          key: const ValueKey('audit-open-chat'),
-                          onPressed: () {
-                            ref
-                                .read(chatControllerProvider.notifier)
-                                .open(event.conversationId!);
-                            go((r) => r.go('/chat'));
-                          },
-                          icon: const Icon(Icons.chat_bubble_outline, size: 18),
-                          label: const Text('Open chat'),
+                      if (event.portalSlug != null)
+                        StatusChip(
+                          'portal: ${event.portalSlug}',
+                          StatusColors.info,
                         ),
                     ],
                   ),
-                ),
-              const Divider(),
-              SelectableText('Event ${event.id}', style: muted),
-            ],
+                  const SizedBox(height: 8),
+                  TabBar(
+                    isScrollable: true,
+                    tabAlignment: TabAlignment.start,
+                    tabs: const [
+                      Tab(key: ValueKey('audit-tab-details'), text: 'Details'),
+                      Tab(key: ValueKey('audit-tab-raw'), text: 'Raw JSON'),
+                    ],
+                  ),
+                  Expanded(
+                    child: TabBarView(
+                      children: [
+                        // What happened, readable.
+                        SingleChildScrollView(
+                          padding: const EdgeInsets.only(
+                            top: 4,
+                            bottom: 8,
+                            right: 8,
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (_contextFields != null)
+                                _Section(
+                                  'Why',
+                                  'Written by the caller. Kept in the audit log, '
+                                      'not sent to the server.',
+                                  ContextFields(
+                                    contextEntries(_contextFields!),
+                                  ),
+                                ),
+                              if (_shownArgs != null)
+                                PreviewSection(
+                                  _forwardedDiffers
+                                      ? 'Arguments from the model'
+                                      : 'Arguments',
+                                  _shownArgs!,
+                                  200,
+                                ),
+                              if (_forwardedDiffers)
+                                PreviewSection(
+                                  'Forwarded to the server',
+                                  event.forwarded!,
+                                  200,
+                                ),
+                              if (event.result != null)
+                                PreviewSection('Result', event.result!, 260),
+                              if (event.error != null)
+                                PreviewSection('Error', event.error!, 180),
+                            ],
+                          ),
+                        ),
+                        // Everything as recorded, each part complete.
+                        SingleChildScrollView(
+                          padding: const EdgeInsets.only(
+                            top: 4,
+                            bottom: 8,
+                            right: 8,
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (event.args != null)
+                                PreviewSection(
+                                  'Arguments from the model',
+                                  event.args!,
+                                  260,
+                                ),
+                              if (event.forwarded != null)
+                                PreviewSection(
+                                  'Forwarded to the server',
+                                  event.forwarded!,
+                                  260,
+                                ),
+                              if (event.context != null)
+                                PreviewSection(
+                                  'Audit-only context',
+                                  event.context!,
+                                  200,
+                                ),
+                              if (event.result != null)
+                                PreviewSection('Result', event.result!, 320),
+                              if (event.error != null)
+                                PreviewSection('Error', event.error!, 200),
+                              PreviewSection(
+                                'The whole event',
+                                prettyJson(_wholeEvent),
+                                320,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (toolStillThere || chatStillThere)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Wrap(
+                        spacing: 8,
+                        runSpacing: 4,
+                        children: [
+                          if (toolStillThere)
+                            TextButton.icon(
+                              key: const ValueKey('audit-open-tool'),
+                              onPressed: () => go(
+                                (r) => r.go(
+                                  '/mcp-tools',
+                                  extra: ToolFocus(
+                                    toolKey(event.serverId!, event.toolName!),
+                                  ),
+                                ),
+                              ),
+                              icon: const Icon(Icons.build_outlined, size: 18),
+                              label: const Text('Open tool'),
+                            ),
+                          if (toolStillThere && args != null)
+                            TextButton.icon(
+                              key: const ValueKey('audit-test-again'),
+                              onPressed: () => go(
+                                (r) => r.go(
+                                  '/mcp-tools',
+                                  extra: ToolFocus(
+                                    toolKey(event.serverId!, event.toolName!),
+                                    args: args,
+                                  ),
+                                ),
+                              ),
+                              icon: const Icon(Icons.replay, size: 18),
+                              label: const Text('Test again'),
+                            ),
+                          if (chatStillThere)
+                            TextButton.icon(
+                              key: const ValueKey('audit-open-chat'),
+                              onPressed: () {
+                                ref
+                                    .read(chatControllerProvider.notifier)
+                                    .open(event.conversationId!);
+                                go((r) => r.go('/chat'));
+                              },
+                              icon: const Icon(
+                                Icons.chat_bubble_outline,
+                                size: 18,
+                              ),
+                              label: const Text('Open chat'),
+                            ),
+                        ],
+                      ),
+                    ),
+                  const Divider(),
+                  SelectableText('Event ${event.id}', style: muted),
+                ],
+              ),
+            ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// A titled block in the detail dialog, with a line saying what it is.
+class _Section extends StatelessWidget {
+  const _Section(this.title, this.hint, this.child);
+  final String title;
+  final String hint;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title),
+          Text(
+            hint,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 6),
+          child,
+        ],
       ),
     );
   }

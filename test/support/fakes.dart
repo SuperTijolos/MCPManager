@@ -260,6 +260,7 @@ Future<void> seedAudit(TestGateway gateway, List<AuditEvent> events) async {
         result: e.result,
         error: e.error,
         conversationId: e.conversationId,
+        portalSlug: e.portalSlug,
       ),
     );
   }

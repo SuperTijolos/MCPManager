@@ -54,7 +54,12 @@ class _PreviewSectionState extends State<PreviewSection> {
             ],
           ),
           const SizedBox(height: 4),
-          CodeBlock(shown, maxHeight: widget.maxHeight),
+          CodeBlock(
+            shown,
+            maxHeight: widget.maxHeight,
+            // Coloured only when it is JSON on screen, not the readable form.
+            json: parsed != null && !readable,
+          ),
           if (previewWasShortened(widget.text))
             Padding(
               padding: const EdgeInsets.only(top: 4),
