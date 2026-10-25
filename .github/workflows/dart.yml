@@ -10,6 +10,23 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    # The server's tests run against a real Postgres.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:test@127.0.0.1:5432/postgres?sslmode=disable
+
     steps:
       - uses: actions/checkout@v4
 
@@ -30,8 +47,22 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Analyze project source
+      - name: Analyze the app
         run: flutter analyze
 
-      - name: Run tests
+      - name: Test the app
         run: flutter test
+
+      - name: Analyze and test the shared core
+        working-directory: packages/mcp_core
+        run: |
+          dart pub get
+          dart analyze
+          dart test
+
+      - name: Analyze and test the server
+        working-directory: server
+        run: |
+          dart pub get
+          dart analyze
+          dart test

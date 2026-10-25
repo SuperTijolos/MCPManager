@@ -11,6 +11,10 @@ include: package:flutter_lints/flutter.yaml
 
 analyzer:
   exclude:
+    # Separate packages with their own pubspec: analyzed and tested on their own
+    # (see .github/workflows/dart.yml), not through the app's package config.
+    - packages/**
+    - server/**
     - build/**
     - android/**
     - ios/**
