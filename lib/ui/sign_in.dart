@@ -2,10 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../engine/mcp/mcp_hub.dart';
-import '../engine/mcp/oauth/oauth_models.dart';
-import '../engine/mcp/oauth/oauth_popup.dart';
-import '../engine/mcp/oauth/oauth_service.dart';
+import '../engine/server/platform.dart';
 import 'widgets.dart';
+
+/// Overridden in tests so no real window is needed.
+final authPopupOpenerProvider = Provider<AuthPopup Function()>(
+  (ref) => openAuthPopup,
+);
 
 /// Starts OAuth sign-in for [serverId]. The sign-in window is opened
 /// synchronously from the click, before any `await`, or browsers block it.
@@ -14,10 +17,10 @@ Future<void> signInToServer(
   WidgetRef ref,
   String serverId,
 ) async {
-  final OAuthPopup popup;
+  final AuthPopup popup;
   try {
-    popup = ref.read(oauthPopupOpenerProvider)();
-  } on OAuthException catch (e) {
+    popup = ref.read(authPopupOpenerProvider)();
+  } on PopupBlocked catch (e) {
     showSnack(context, e.message);
     return;
   }

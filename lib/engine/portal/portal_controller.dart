@@ -1,42 +1,19 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:http/http.dart' as http;
 
-import '../core/json.dart';
-import '../core/prefs.dart';
-import '../core/url.dart';
-import '../mcp/mcp_hub.dart';
-import '../mcp/mcp_models.dart';
-import '../rules/tool_rules_store.dart';
+import '../server/server_client.dart';
+import '../server/server_events.dart';
+import '../server/session.dart';
 import 'portal_api.dart';
 import 'portal_models.dart';
-
-const _storageKey = 'mcpm.portal.v1';
-
-/// Where the gateway is and the token that manages it. The token lives in this
-/// browser only, like every other credential the app keeps.
-class PortalSettings {
-  const PortalSettings({this.url = '', this.token = ''});
-  final String url;
-  final String token;
-
-  bool get configured => url.isNotEmpty && token.isNotEmpty;
-
-  Json toJson() => {'url': url, 'token': token};
-
-  factory PortalSettings.fromJson(Json json) => PortalSettings(
-    url: json['url'] as String? ?? '',
-    token: json['token'] as String? ?? '',
-  );
-}
 
 enum PortalConnection { notConfigured, connecting, connected, failed }
 
 /// Everything the Portals page shows, as last read from the gateway.
 class PortalData {
   const PortalData({
-    this.settings = const PortalSettings(),
+    this.serverUrl = '',
     this.connection = PortalConnection.notConfigured,
     this.error,
     this.status,
@@ -46,7 +23,7 @@ class PortalData {
     this.refreshedAt,
   });
 
-  final PortalSettings settings;
+  final String serverUrl;
   final PortalConnection connection;
   final String? error;
   final GatewayStatus? status;
@@ -63,7 +40,7 @@ class PortalData {
       portals.where((p) => p.id == id).firstOrNull;
 
   PortalData copyWith({
-    PortalSettings? settings,
+    String? serverUrl,
     PortalConnection? connection,
     String? error,
     bool clearError = false,
@@ -73,7 +50,7 @@ class PortalData {
     List<GatewayToken>? tokens,
     DateTime? refreshedAt,
   }) => PortalData(
-    settings: settings ?? this.settings,
+    serverUrl: serverUrl ?? this.serverUrl,
     connection: connection ?? this.connection,
     error: clearError ? null : error ?? this.error,
     status: status ?? this.status,
@@ -84,102 +61,63 @@ class PortalData {
   );
 }
 
-/// The HTTP client used for the gateway. Tests replace it.
-final portalHttpClientProvider = Provider<http.Client>((ref) {
-  final client = http.Client();
-  ref.onDispose(client.close);
-  return client;
-});
-
 final portalControllerProvider = NotifierProvider<PortalController, PortalData>(
   PortalController.new,
 );
 
+/// Portals and access tokens, as the server has them. Changes made elsewhere
+/// arrive over the event stream.
 class PortalController extends Notifier<PortalData> {
+  ServerClient? _client;
+  Timer? _debounce;
+  Completer<void>? _loaded;
+
+  /// Completes when the first load has finished.
+  Future<void> get loaded => (_loaded ??= Completer<void>()).future;
+
   @override
   PortalData build() {
-    final raw = readJson(ref.read(sharedPreferencesProvider), _storageKey);
-    var settings = const PortalSettings();
-    if (raw is Map) {
-      try {
-        settings = PortalSettings.fromJson(raw.cast<String, dynamic>());
-      } catch (_) {}
+    _client = ref.watch(serverClientProvider);
+    final url = ref.watch(sessionProvider).serverUrl ?? '';
+    ref.onDispose(() => _debounce?.cancel());
+    listenToServer(ref, (e) {
+      final what = e.type == 'changed'
+          ? ((e.data['collections'] as List?) ?? const [])
+          : const [];
+      if (e.type == 'ready' ||
+          what.any((c) => c == 'portals' || c == 'tokens' || c == 'servers')) {
+        _debounce?.cancel();
+        _debounce = Timer(const Duration(milliseconds: 200), () {
+          if (ref.mounted) unawaited(_reload());
+        });
+      }
+    });
+    final done = _loaded = Completer<void>();
+    if (_client != null) {
+      Future.microtask(() async {
+        await _load(reportFailure: true);
+        if (!done.isCompleted) done.complete();
+      });
+    } else {
+      done.complete();
     }
     return PortalData(
-      settings: settings,
-      connection: settings.configured
-          ? PortalConnection.connecting
-          : PortalConnection.notConfigured,
-    );
-  }
-
-  /// The api for the saved settings, or null when none are saved.
-  PortalApi? get _maybeApi {
-    final settings = state.settings;
-    if (!settings.configured) return null;
-    return PortalApi(
-      baseUrl: settings.url,
-      token: settings.token,
-      client: ref.read(portalHttpClientProvider),
+      serverUrl: url,
+      connection: _client == null
+          ? PortalConnection.notConfigured
+          : PortalConnection.connecting,
     );
   }
 
   PortalApi get _api {
-    final api = _maybeApi;
-    if (api == null) throw PortalApiException('Connect to a gateway first.');
-    return api;
-  }
-
-  /// Checks the address and token, saves them and loads the gateway.
-  /// Returns an error message, or null on success.
-  Future<String?> connect(String url, String token) async {
-    final normalized = normalizeBaseUrl(url).replaceAll(RegExp(r'/+$'), '');
-    if (!isValidHttpUrl(normalized)) {
-      return 'Enter the gateway address, for example http://localhost:8787.';
-    }
-    final secret = token.trim();
-    if (secret.isEmpty) return 'Enter the admin token.';
-
-    final api = PortalApi(
-      baseUrl: normalized,
-      token: secret,
-      client: ref.read(portalHttpClientProvider),
-    );
-    state = state.copyWith(
-      connection: PortalConnection.connecting,
-      clearError: true,
-    );
-    try {
-      final status = await api.status();
-      final settings = PortalSettings(url: normalized, token: secret);
-      await writeJson(
-        ref.read(sharedPreferencesProvider),
-        _storageKey,
-        settings.toJson(),
-      );
-      state = state.copyWith(settings: settings, status: status);
-      await refresh();
-      return null;
-    } on PortalApiException catch (e) {
-      state = state.copyWith(
-        connection: state.settings.configured
-            ? PortalConnection.failed
-            : PortalConnection.notConfigured,
-        error: e.message,
-      );
-      return e.message;
-    }
-  }
-
-  /// Forgets the gateway (it keeps running; only this app lets go of it).
-  Future<void> disconnect() async {
-    await ref.read(sharedPreferencesProvider).remove(_storageKey);
-    state = const PortalData();
+    final client = _client;
+    if (client == null) throw PortalApiException('Sign in first.');
+    return PortalApi(client);
   }
 
   /// Re-reads everything from the gateway.
   Future<void> refresh() async {
-    if (_maybeApi == null) return;
+    if (_client == null) return;
     state = state.copyWith(
       connection: PortalConnection.connecting,
       clearError: true,
@@ -192,8 +130,9 @@ class PortalController extends Notifier<PortalData> {
   int _loads = 0;
 
   Future<void> _load({required bool reportFailure}) async {
-    final api = _maybeApi;
-    if (api == null) return;
+    final client = _client;
+    if (client == null) return;
+    final api = PortalApi(client);
     final mine = ++_loads;
     try {
       final results = await Future.wait<Object>([
@@ -220,48 +159,6 @@ class PortalController extends Notifier<PortalData> {
         error: e.message,
       );
     }
-  }
-
-  // ----------------------------------------------------------------- servers
-
-  /// Sends this app's server to the gateway under the same id, so tool rules
-  /// written here apply there too. Includes its headers, tokens among them.
-  Future<GatewayServer> publishServer(McpServerConfig config) async {
-    final saved = await _api.saveServer(
-      id: config.id,
-      name: config.name,
-      url: config.url,
-      headers: config.headers,
-      transport: config.transport.wire,
-      enabled: config.enabled,
-    );
-    await _reload();
-    return saved;
-  }
-
-  /// Whether the gateway can use [config]: servers that need this browser's
-  /// OAuth sign-in cannot be reached from the gateway.
-  static bool publishable(McpServerConfig config) => !config.oauth;
-
-  Future<void> removeServer(String id) async {
-    await _api.deleteServer(id);
-    await _reload();
-  }
-
-  Future<GatewayTestResult> testServer(String id) => _api.testServer(id);
-
-  /// Replaces the gateway's tool rules and hidden-tool settings with this
-  /// app's. Returns how many rules and overrides were sent.
-  Future<({int rules, int overrides})> pushRules() async {
-    final rules = ref.read(toolRulesProvider);
-    await _api.putRules({
-      'rules': [for (final r in rules.rules) r.toJson()],
-      'overrides': {
-        for (final e in rules.overrides.entries) e.key: e.value.toJson(),
-      },
-    });
-    await _reload();
-    return (rules: rules.rules.length, overrides: rules.overrides.length);
   }
 
   // ----------------------------------------------------------------- portals
@@ -320,26 +217,6 @@ class PortalController extends Notifier<PortalData> {
     await _reload();
   }
 
-  // ------------------------------------------------------------------- audit
-
-  Future<List<GatewayEvent>> audit({
-    int limit = 100,
-    String? portalId,
-    String? status,
-    String? query,
-  }) => _api.audit(
-    limit: limit,
-    portalId: portalId,
-    status: status,
-    query: query,
-  );
-
   /// Refreshes the lists after a change.
   Future<void> _reload() => _load(reportFailure: false);
 }
-
-/// Ids of this app's servers that the gateway does not have yet.
-List<McpServerConfig> unpublishedServers(McpHubState hub, PortalData data) => [
-  for (final s in hub.servers)
-    if (data.server(s.config.id) == null) s.config,
-];

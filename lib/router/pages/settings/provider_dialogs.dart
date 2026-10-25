@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../engine/core/ids.dart';
 import '../../../engine/core/url.dart';
 import '../../../engine/llm/llm_settings.dart';
+import '../../../engine/server/server_client.dart';
 import '../../../engine/llm/llm_types.dart';
 import '../../../engine/llm/provider_config.dart';
 import '../../../engine/llm/provider_presets.dart';
@@ -37,6 +38,14 @@ class _ProviderDialogState extends ConsumerState<ProviderDialog> {
   late ProviderKind _kind;
   bool _showKey = false;
 
+  /// The server holds a key for this provider (its value is never sent back).
+  late bool _hasKey;
+
+  /// Remove the stored key when saving.
+  bool _removeKey = false;
+  String? _error;
+  bool _saving = false;
+
   @override
   void initState() {
     super.initState();
@@ -45,7 +54,8 @@ class _ProviderDialogState extends ConsumerState<ProviderDialog> {
     _kind = p?.kind ?? preset?.kind ?? ProviderKind.ollama;
     _name = TextEditingController(text: p?.name ?? preset?.name ?? '');
     _url = TextEditingController(text: p?.baseUrl ?? preset?.baseUrl ?? '');
-    _key = TextEditingController(text: p?.apiKey ?? '');
+    _key = TextEditingController();
+    _hasKey = p?.hasKey ?? false;
     _context = TextEditingController(
       text: '${p?.contextLength ?? defaultOllamaContext}',
     );
@@ -66,7 +76,7 @@ class _ProviderDialogState extends ConsumerState<ProviderDialog> {
           ? 'http://localhost:11434'
           : 'https://host/v1');
 
-  void _save() {
+  Future<void> _save() async {
     if (!_form.currentState!.validate()) return;
     final existing = widget.existing;
     final key = normalizeApiKey(_key.text);
@@ -75,36 +85,53 @@ class _ProviderDialogState extends ConsumerState<ProviderDialog> {
     final numCtx = _kind == ProviderKind.ollama
         ? int.tryParse(_context.text.trim())
         : null;
-    if (existing == null) {
-      notifier.upsert(
-        ProviderConfig(
-          id: newId('llm'),
-          name: _name.text.trim(),
-          kind: _kind,
-          baseUrl: url,
-          apiKey: key.isEmpty ? null : key,
-          models:
-              widget.preset?.models ??
-              (_kind == ProviderKind.ollama
-                  ? const [defaultOllamaModel]
-                  : const []),
-          contextLength: numCtx,
-        ),
-      );
-    } else {
-      notifier.upsert(
-        existing.copyWith(
-          name: _name.text.trim(),
-          kind: _kind,
-          baseUrl: url,
-          apiKey: key.isEmpty ? null : key,
-          clearApiKey: key.isEmpty,
-          contextLength: numCtx,
-          clearContextLength: numCtx == null,
-        ),
-      );
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      if (existing == null) {
+        await notifier.upsert(
+          ProviderConfig(
+            id: newId('llm'),
+            name: _name.text.trim(),
+            kind: _kind,
+            baseUrl: url,
+            apiKey: key.isEmpty ? null : key,
+            models:
+                widget.preset?.models ??
+                (_kind == ProviderKind.ollama
+                    ? const [defaultOllamaModel]
+                    : const []),
+            contextLength: numCtx,
+          ),
+        );
+      } else {
+        await notifier.upsert(
+          existing.copyWith(
+            name: _name.text.trim(),
+            kind: _kind,
+            baseUrl: url,
+            // Only a key typed now is sent; otherwise the server keeps its own.
+            apiKey: key.isEmpty ? null : key,
+            clearApiKey: key.isEmpty,
+            hasKey: key.isEmpty && !_removeKey && _hasKey,
+            contextLength: numCtx,
+            clearContextLength: numCtx == null,
+          ),
+          clearKey: _removeKey && key.isEmpty,
+        );
+      }
+    } on ServerException catch (e) {
+      if (mounted) {
+        setState(() {
+          _saving = false;
+          _error = e.message;
+        });
+      }
+      return;
     }
-    Navigator.pop(context);
+    if (mounted) Navigator.pop(context);
   }
 
   @override
@@ -181,7 +208,10 @@ class _ProviderDialogState extends ConsumerState<ProviderDialog> {
                             )
                         ? 'API key'
                         : 'API key (optional)',
-                    helperText: 'Stored in this browser only. Paste a key with or without Bearer.',
+                    helperText: _hasKey && !_removeKey
+                        ? 'A key is stored on the server. Leave empty to keep it.'
+                        : 'Sent to the server, which keeps it. Paste a key with or without Bearer.',
+                    helperMaxLines: 2,
                     suffixIcon: IconButton(
                       tooltip: _showKey ? 'Hide key' : 'Show key',
                       icon: Icon(
@@ -203,11 +233,34 @@ class _ProviderDialogState extends ConsumerState<ProviderDialog> {
                     }
                     return (preset?.needsKey == true ||
                                 providerRequiresApiKey(_kind, url)) &&
-                            normalizeApiKey(v).isEmpty
+                            normalizeApiKey(v).isEmpty &&
+                            !(_hasKey && !_removeKey)
                         ? 'This service needs a key'
                         : null;
                   },
                 ),
+                if (_hasKey)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton(
+                      key: const ValueKey('remove-key'),
+                      onPressed: () => setState(() => _removeKey = !_removeKey),
+                      child: Text(
+                        _removeKey
+                            ? 'Keep the stored key'
+                            : 'Remove the stored key',
+                      ),
+                    ),
+                  ),
+                if (_error != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      _error!,
+                      key: const ValueKey('provider-error'),
+                      style: const TextStyle(color: StatusColors.bad),
+                    ),
+                  ),
                 if (_kind == ProviderKind.ollama) ...[
                   const SizedBox(height: 12),
                   TextFormField(
@@ -239,7 +292,10 @@ class _ProviderDialogState extends ConsumerState<ProviderDialog> {
           onPressed: () => Navigator.pop(context),
           child: const Text('Cancel'),
         ),
-        FilledButton(onPressed: _save, child: const Text('Save')),
+        FilledButton(
+          onPressed: _saving ? null : _save,
+          child: const Text('Save'),
+        ),
       ],
     );
   }

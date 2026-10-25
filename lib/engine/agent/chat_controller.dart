@@ -4,11 +4,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/ids.dart';
 import '../core/json.dart';
-import '../core/prefs.dart';
 import '../llm/llm_settings.dart';
 import '../llm/llm_types.dart';
 import '../llm/provider_config.dart';
 import '../settings/app_settings.dart';
+import '../server/server_events.dart';
 import 'chat_store.dart';
 import 'agent_tool.dart';
 import 'context_budget.dart';
@@ -245,25 +245,53 @@ class ChatController extends Notifier<ChatState> {
   /// The "tool list is too big for this window" notice, once per conversation.
   bool _warnedOverhead = false;
 
-  ChatStore get _store => ChatStore(ref.read(sharedPreferencesProvider));
+  ChatStore get _store => ref.read(chatStoreProvider);
+
+  Completer<void>? _loaded;
+  Timer? _reloadTimer;
+
+  /// Completes when the conversation list (and the open conversation) has
+  /// been loaded from the server.
+  Future<void> get loaded => (_loaded ??= Completer<void>()).future;
 
   @override
   ChatState build() {
     ref.onDispose(() {
       _cancelled = true;
       _flushTimer?.cancel();
+      _reloadTimer?.cancel();
       _resolveAll(ApprovalDecision.deny);
     });
-    final store = _store;
-    final conversations = store.migrateLegacy(
-      store.index(),
-      () => newId('chat'),
-    );
-    final activeId = store.activeId();
-    if (activeId != null && conversations.any((c) => c.id == activeId)) {
-      return _load(activeId, conversations);
-    }
-    return ChatState(conversations: conversations);
+    final store = ref.watch(chatStoreProvider);
+    final done = _loaded = Completer<void>();
+    listenToServer(ref, (e) {
+      if (e.type != 'chat' && e.type != 'ready') return;
+      // Another tab or device changed the history: refresh the list. Our own
+      // writes would echo back here, so wait until they have all landed.
+      _reloadTimer?.cancel();
+      _reloadTimer = Timer(const Duration(milliseconds: 400), () async {
+        if (!ref.mounted || store.busy || state.running) return;
+        final list = await store.loadIndex();
+        if (ref.mounted && !store.busy && !state.running) {
+          state = state.copyWith(conversations: list);
+        }
+      });
+    });
+    Future.microtask(() async {
+      final conversations = await store.loadIndex();
+      if (!ref.mounted) return;
+      final activeId = store.activeId();
+      if (activeId != null && conversations.any((c) => c.id == activeId)) {
+        await store.fetch(activeId);
+        if (ref.mounted && state.items.isEmpty && !state.running) {
+          state = _load(activeId, conversations);
+        }
+      } else if (state.items.isEmpty) {
+        state = state.copyWith(conversations: conversations);
+      }
+      if (!done.isCompleted) done.complete();
+    });
+    return const ChatState();
   }
 
   ChatState _load(String id, List<ConversationMeta> conversations) {
@@ -389,12 +417,14 @@ class ChatController extends Notifier<ChatState> {
   }
 
   /// Switches to a saved conversation, stopping any run in progress.
-  void open(String id) {
+  Future<void> open(String id) async {
     if (id == state.activeId) return;
     if (!state.conversations.any((c) => c.id == id)) return;
     if (state.running) stop();
     _runToken++;
     _dropPendingText();
+    await _store.fetch(id);
+    if (!ref.mounted) return;
     _store.setActive(id);
     state = _load(id, state.conversations);
   }
@@ -432,16 +462,20 @@ class ChatController extends Notifier<ChatState> {
   }
 
   /// Deletes every saved conversation.
-  void deleteAll() {
+  Future<void> deleteAll() async {
     for (final c in state.conversations) {
       _store.delete(c.id);
     }
     _store.saveIndex(const []);
     newConversation();
     state = const ChatState();
+    await _store.flushed;
   }
 
   Future<void> send(String text) async {
+    // The saved conversations arrive from the server a moment after start;
+    // sending before then would be overwritten by them.
+    await loaded;
     final prompt = text.trim();
     if (prompt.isEmpty || state.running) return;
 

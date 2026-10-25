@@ -29,11 +29,26 @@ class TestGateway {
   static Future<TestGateway> start({
     FakeMcpServer? upstream,
     http.Client Function()? upstreamClient,
+    http.Client Function()? llmClient,
+    http.Client Function()? githubClient,
+    List<String> githubOrgs = const [],
+    List<String> allowedOrigins = const [],
   }) async {
     final server = await GatewayServer.create(
-      GatewayConfig(adminToken: gatewayAdminToken, publicBaseUrl: gatewayUrl),
+      GatewayConfig(
+        adminToken: gatewayAdminToken,
+        publicBaseUrl: gatewayUrl,
+        // The dashboard tests ask for health themselves.
+        healthInterval: Duration.zero,
+        githubClientId: githubClient == null ? null : 'gh-client',
+        githubClientSecret: githubClient == null ? null : 'gh-secret',
+        githubOrgs: githubOrgs,
+        allowedOrigins: allowedOrigins,
+      ),
       upstreamClient:
           upstreamClient ?? () => (upstream ?? FakeMcpServer()).client,
+      llmClient: llmClient,
+      githubClient: githubClient,
       inMemory: true,
     );
     final client = MockClient.streaming((request, body) async {

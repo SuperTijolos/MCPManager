@@ -1,8 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../audit/audit_log.dart';
 import '../audit/audit_models.dart';
-import '../core/redact.dart';
 import '../rules/tool_rules.dart';
 import '../rules/tool_rules_store.dart';
 import '../settings/app_settings.dart';
@@ -170,36 +168,15 @@ class _McpAgentTool extends AgentTool {
 
   @override
   Future<AgentToolResult> run(Json args, ToolRunContext context) async {
-    final prepared = prepareCall(_effective, args);
-    if (prepared.error != null) {
-      // The call never reaches the server; record the attempt anyway.
-      if (_ref.mounted) {
-        _ref
-            .read(auditLogProvider.notifier)
-            .record(
-              kind: AuditKind.toolCall,
-              status: AuditStatus.error,
-              source: AuditSource.operator,
-              actor: context.actor,
-              serverId: _server.id,
-              serverName: _server.name,
-              toolName: _tool.name,
-              args: redactedPreview(args),
-              error: 'Rejected before forwarding: ${prepared.error}',
-              approval: context.approval,
-              conversationId: context.conversationId,
-            );
-      }
-      return AgentToolResult(prepared.error!, isError: true);
-    }
+    // The server applies the rules, refuses a call that misses a required
+    // argument, and records either outcome.
     final result = await _ref
         .read(mcpHubProvider.notifier)
         .callTool(
           serverId: _server.id,
           toolName: _tool.name,
-          args: prepared.forwarded,
+          args: args,
           clientArgs: args,
-          context: prepared.context,
           source: AuditSource.operator,
           actor: context.actor,
           approval: context.approval,
@@ -209,14 +186,15 @@ class _McpAgentTool extends AgentTool {
   }
 
   @override
-  void onDenied(Json args, ToolRunContext context) {
-    _ref
+  Future<void> onDenied(Json args, ToolRunContext context) async {
+    await _ref
         .read(mcpHubProvider.notifier)
         .recordDenied(
           serverId: _server.id,
           toolName: _tool.name,
           args: args,
           actor: context.actor,
+          conversationId: context.conversationId,
         );
   }
 }

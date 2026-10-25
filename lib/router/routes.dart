@@ -9,6 +9,7 @@ import 'pages/overview/overview_page.dart';
 import 'pages/portals/portals_page.dart';
 import 'pages/servers/servers_page.dart';
 import 'pages/settings/settings_page.dart';
+import 'pages/sign_in/sign_in_page.dart';
 import 'pages/tools/tool_focus.dart';
 import 'pages/tools/tools_page.dart';
 import 'shell.dart';
@@ -50,8 +51,30 @@ const secondaryDestinations = [
 Page<void> _page(Widget child, GoRouterState state) =>
     NoTransitionPage<void>(key: state.pageKey, child: child);
 
-GoRouter createRouter() => GoRouter(
+const signInPath = '/sign-in';
+
+/// [signedIn] decides whether the dashboard or the sign-in page is shown;
+/// [refresh] tells the router to ask again when that changes.
+GoRouter createRouter({
+  bool Function()? signedIn,
+  Listenable? refresh,
+}) => GoRouter(
+  refreshListenable: refresh,
+  redirect: signedIn == null
+      ? null
+      : (context, state) {
+          final inside = signedIn();
+          final onSignIn = state.uri.path == signInPath;
+          if (!inside && !onSignIn) return signInPath;
+          if (inside && onSignIn) return '/';
+          return null;
+        },
   routes: [
+    GoRoute(
+      path: signInPath,
+      name: 'Sign in',
+      pageBuilder: (c, s) => _page(const SignInPage(), s),
+    ),
     ShellRoute(
       builder: (context, state, child) =>
           AppShell(location: state.uri.path, child: child),

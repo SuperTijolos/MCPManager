@@ -10,7 +10,7 @@ import '../llm/llm_settings.dart';
 import '../llm/provider_config.dart';
 import '../mcp/mcp_hub.dart';
 import '../mcp/mcp_models.dart';
-import '../mcp/oauth/oauth_service.dart';
+import '../server/session.dart';
 import '../rules/tool_rules_store.dart';
 import 'agent_tool.dart';
 
@@ -84,31 +84,31 @@ class _PlatformTool extends AgentTool {
     try {
       final output = await _handler(args, context);
       final text = output is String ? output : prettyJson(output);
-      _record(args, context, AuditStatus.success, result: text);
+      await _record(args, context, AuditStatus.success, result: text);
       return AgentToolResult(text);
     } on ToolArgError catch (e) {
-      _record(args, context, AuditStatus.error, error: e.message);
+      await _record(args, context, AuditStatus.error, error: e.message);
       return AgentToolResult(e.message, isError: true);
     } catch (e) {
-      _record(args, context, AuditStatus.error, error: '$e');
+      await _record(args, context, AuditStatus.error, error: '$e');
       return AgentToolResult('$e', isError: true);
     }
   }
 
   @override
-  void onDenied(Json args, ToolRunContext context) =>
+  Future<void> onDenied(Json args, ToolRunContext context) =>
       _record(args, context, AuditStatus.denied);
 
-  void _record(
+  Future<void> _record(
     Json args,
     ToolRunContext context,
     AuditStatus status, {
     String? result,
     String? error,
-  }) {
+  }) async {
     if (auditAction == null || !_ref.mounted) return;
     final server = args['server'] ?? args['name'];
-    _ref
+    await _ref
         .read(auditLogProvider.notifier)
         .record(
           kind: AuditKind.manage,
@@ -379,14 +379,15 @@ List<AgentTool> platformTools(Ref ref) {
         'redirectUri': uri.toString(),
         'note':
             'Add this exact URI to the OAuth provider\'s allowed redirect URIs. '
-            'Servers configured only for ChatGPT (https://chatgpt.com/connector/oauth/*) '
-            'or another client will reject it until it is added, or until a '
-            'pre-registered client id that allows it is supplied. The provider '
-            'must also allow CORS from ${uri.scheme}://${uri.authority}.',
+            'It is the gateway\'s own callback address: the gateway signs in to the '
+            'server for everyone. Servers configured only for ChatGPT '
+            '(https://chatgpt.com/connector/oauth/*) or another client will '
+            'reject it until it is added, or until a pre-registered client id '
+            'that allows it is supplied.',
         if (uri.scheme == 'http' &&
             uri.host != 'localhost' &&
             uri.host != '127.0.0.1')
-          'warning': 'This app is served over plain http from a non-local address; many providers only accept https or localhost redirect URIs.',
+          'warning': 'The gateway is reached over plain http from a non-local address; many providers only accept https or localhost redirect URIs.',
       };
     },
   );
@@ -608,7 +609,7 @@ List<AgentTool> platformTools(Ref ref) {
     ),
     (args, _) async {
       final server = findServer(ref, args['server']);
-      hub.removeServer(server.config.id);
+      await hub.removeServer(server.config.id);
       return {'removed': server.config.name};
     },
     approval: true,
@@ -665,9 +666,9 @@ List<AgentTool> platformTools(Ref ref) {
     (_, context) async {
       final log = ref.read(auditLogProvider.notifier);
       final count = ref.read(auditLogProvider).length;
-      log.clear();
+      await log.clear();
       // The wipe itself stays on record.
-      log.record(
+      await log.record(
         kind: AuditKind.manage,
         status: AuditStatus.success,
         source: AuditSource.operator,

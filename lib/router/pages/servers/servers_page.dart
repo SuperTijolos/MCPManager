@@ -55,7 +55,7 @@ class _ServersPageState extends ConsumerState<ServersPage> {
           ? EmptyState(
               icon: Icons.dns_outlined,
               title: 'No servers yet',
-              message: 'Add an MCP server (Streamable HTTP or legacy SSE, detected automatically). From a browser it must allow CORS for this origin.',
+              message: 'Add an MCP server (Streamable HTTP or legacy SSE, detected automatically). Your MCP Manager server connects to it.',
               action: FilledButton.icon(
                 onPressed: () => showServerDialog(context),
                 icon: const Icon(Icons.add),
@@ -384,7 +384,10 @@ class _ServerCard extends ConsumerWidget {
               children: [
                 Switch.adaptive(
                   value: config.enabled,
-                  onChanged: (value) => hub.setEnabled(config.id, value),
+                  onChanged: (value) => serverAction(
+                    context,
+                    () => hub.setEnabled(config.id, value),
+                  ),
                 ),
                 Expanded(child: Text('Enabled', style: muted, maxLines: 1)),
                 if (runtime.status == ServerStatus.needsAuth)
@@ -421,7 +424,10 @@ class _ServerCard extends ConsumerWidget {
                   tooltip: 'More server actions',
                   onSelected: (action) => switch (action) {
                     _ServerAction.reconnect => hub.connect(config.id),
-                    _ServerAction.signOut => hub.signOut(config.id),
+                    _ServerAction.signOut => serverAction(
+                      context,
+                      () => hub.signOut(config.id),
+                    ),
                     _ServerAction.remove => _confirmRemove(context, hub),
                   },
                   itemBuilder: (context) => [
@@ -471,7 +477,9 @@ class _ServerCard extends ConsumerWidget {
         ],
       ),
     );
-    if (ok == true) hub.removeServer(runtime.config.id);
+    if (ok == true && context.mounted) {
+      await serverAction(context, () => hub.removeServer(runtime.config.id));
+    }
   }
 }
 

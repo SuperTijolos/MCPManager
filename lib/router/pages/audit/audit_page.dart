@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import '../../../engine/agent/chat_controller.dart';
 import '../../../engine/audit/audit_export.dart';
 import '../../../engine/audit/audit_log.dart';
+import '../../../engine/server/server_client.dart';
 import '../../../engine/audit/audit_text.dart';
 import '../../../engine/audit/audit_models.dart';
 import '../../../engine/core/json.dart';
@@ -100,6 +101,7 @@ String sourceLabel(AuditSource s) => switch (s) {
   AuditSource.workbench => 'Tools page',
   AuditSource.operator => 'Chat',
   AuditSource.system => 'System',
+  AuditSource.portal => 'Portal',
 };
 
 /// A run of identical successful events, such as the same server connecting
@@ -521,10 +523,21 @@ class _AuditPageState extends ConsumerState<AuditPage> {
     );
     if (scope == null || !mounted) return;
     final log = ref.read(auditLogProvider.notifier);
-    final removed = scope == _ClearScope.everything
-        ? ref.read(auditLogProvider).length
-        : log.removeWhere((e) => scope.matches(e, DateTime.now()));
-    if (scope == _ClearScope.everything) log.clear();
+    final int removed;
+    try {
+      if (scope == _ClearScope.everything) {
+        removed = ref.read(auditLogProvider).length;
+        await log.clear();
+      } else {
+        removed = await log.removeWhere(
+          (e) => scope.matches(e, DateTime.now()),
+        );
+      }
+    } on ServerException catch (e) {
+      if (context.mounted) showSnack(context, e.message);
+      return;
+    }
+    if (!mounted) return;
     setState(() => _page = 0);
     if (context.mounted) showSnack(context, 'Cleared ${_events(removed)}');
   }

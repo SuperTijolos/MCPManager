@@ -8,8 +8,8 @@ It is a Flutter web app built for the Hacktober Portimão festival, and a ground
 - **Inspect and test tools.** Read each tool's schema and run it from a test bench. Rules add shared arguments such as `reason` or `expected result` to many tools at once, and can hide or reshape what the Operator sees.
 - **Audit everything.** Every tool call, connection, sign-in and management action is recorded with the actor and how it was approved. Secrets are redacted, and the log can be filtered, paginated and inspected event by event.
 - **Operate with approvals.** Read-only tools run without asking. Anything else waits for your approval by default. Each chat has an **Ask first / Automatic** switch: in Automatic, its tool calls run without asking, including configuration changes.
-- **Run in the browser.** The app has no backend: settings, servers and history stay in your browser's local storage, and backups move them between machines.
-- **Publish servers as portals.** An optional gateway (in `server/`) turns chosen servers into authenticated MCP endpoints that Claude, ChatGPT or any MCP client can use, with the same tool rules, access tokens, OAuth sign-in and an audit log of its own. See [Portals and the gateway](#portals-and-the-gateway).
+- **A dashboard over a server.** The Flutter app is the dashboard; the Dart **server** in [`server/`](server/README.md) holds everything in PostgreSQL: servers and their credentials, OAuth sign-ins, rules, portals, the audit log, conversations and model providers (with their keys). The server connects to your MCP servers, so they need no CORS settings, and it records every call whoever made it. Several people can share one server: they sign in with **GitHub** (limited to the organisations you list), and the dashboard updates live as others change things.
+- **Publish servers as portals.** The same server turns chosen servers into authenticated MCP endpoints that Claude, ChatGPT or any MCP client can use, with the same tool rules, access tokens and OAuth sign-in. See [Portals and the server](#portals-and-the-server).
 
 **Credits.** Made in collaboration with Tomás Rodrigues, [GuikiPT](https://github.com/GuikiPT) and [AjaxR0](https://github.com/AjaxR0). Their names and GitHub profiles are also listed on the MLH team page for the project.
 
@@ -20,29 +20,31 @@ It is a Flutter web app built for the Hacktober Portimão festival, and a ground
 | **Overview** | Servers online, tools, 24 h call volume per hour, error rate, latency (avg / p95), busiest tools, model reachability check. |
 | **MCP Servers** | Add/edit/remove MCP servers (Streamable HTTP or legacy HTTP+SSE, detected automatically), bearer token / OAuth and custom headers, live status, protocol, latency and a trace of what was tried. The Edit dialog is sectioned (connection, authentication, headers, advanced) and has a **Test connection** button. |
 | **MCP Tools** | Browse and search every tool, filter by read-only/may-modify/hidden status and connected server, inspect effective rules, read its schema, and run it from a test bench. The list and detail panes are separated by a draggable divider (double-click resets, ←/→ nudge). **Rules** reshape what the Operator sees (see below). |
-| **Portals** | Publish chosen servers as MCP endpoints through the gateway: put servers on it, group them into portals, create access tokens, send your tool rules, and watch what clients call. |
+| **Portals** | Publish chosen servers as MCP endpoints: group them into portals and create access tokens. What clients call shows on the Audit page, marked as coming through a portal. |
 | **Chat** | Chat with the model. It can manage servers, find the right tool for a job, recover from failed calls, and run your servers' tools. Conversations are saved: a history panel lets you search, rename, delete and reopen older chats. |
 | **Audit** | Two views: **MCP tools** (tool calls) and **Activity** (connections, sign-ins and management actions), each with its own count and filters. Filter, search and paginate (page size selectable). Open any row for a detail dialog with the redacted arguments, the forwarded values, the result, the actor and the approval mode, or copy it as JSON. |
-| **Settings** | Model providers and enabled models (with presets for common endpoints), Operator limits and your own instructions, plus storage usage, backup / restore and a full reset. |
-| **About / Contributors** | What the app does, how the pieces fit, safety and data notes, facts about this copy (including the OAuth redirect URI), and the people who built it. |
+| **Settings** | Model providers and enabled models (with presets for common endpoints; keys stay on the server), Operator limits and your own instructions, plus who is signed in, where the data lives, and clean-up. |
+| **About / Contributors** | What the app does, how the pieces fit, safety and data notes, facts about this copy (the server, who is signed in, the OAuth redirect URI), and the people who built it. |
 
-### Portals and the gateway
+### Portals and the server
 
-A portal is one MCP endpoint (`https://your-host/mcp/<name>`) that publishes a set of your servers to other MCP clients. The browser app cannot serve an endpoint, so portals run on the **gateway**, a small Dart server in [`server/`](server/README.md): it holds the upstream servers you put on it, applies your tool rules, checks the caller (an access token, or OAuth sign-in for web connectors), forwards the call and records it. The **Portals** page is its control panel.
+A portal is one MCP endpoint (`https://your-host/mcp/<name>`) that publishes a set of your servers to other MCP clients. The browser cannot serve an endpoint, so the **server** does: it applies your tool rules, checks the caller (an access token, or OAuth sign-in for web connectors), forwards the call and records it.
 
 ```bash
-cd server && dart pub get && dart run bin/mcp_portal.dart   # prints the admin token once
+docker compose -f server/docker-compose.yml up -d --build   # Postgres + the server
+docker compose -f server/docker-compose.yml logs portal      # the admin token, printed once
 ```
 
-Then open **Portals** in the app, connect with that address and token, put a server on the gateway, create a portal and an access token. The [gateway README](server/README.md) covers HTTPS, Docker, settings and the security model.
+Without Docker: create a database and run `DATABASE_URL=postgresql://… dart run bin/mcp_portal.dart` in `server/`. The [server README](server/README.md) covers GitHub sign-in, HTTPS, settings and the security model; [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) explains how the pieces fit.
 
 ### Repository layout
 
 | Folder | |
 |---|---|
-| `lib/`, `web/` | The Flutter web app. |
-| `packages/mcp_core/` | Flutter-free core shared by the app and the gateway: MCP models and clients, tool rules, redaction. |
-| `server/` | The portal gateway. |
+| `lib/`, `web/` | The Flutter web dashboard. |
+| `packages/mcp_core/` | Flutter-free core shared by the dashboard and the server: MCP models and clients, OAuth, tool rules, redaction. |
+| `server/` | The server: API, portals, GitHub sign-in, event stream. |
+| `migrations/` | The SQL schema, applied by the server at start-up. |
 
 ### Tool rules
 
@@ -66,11 +68,15 @@ The Operator is given a map of your tools grouped by purpose (for example "run c
 
 ## Run it
 
+Start the server first (see [Portals and the server](#portals-and-the-server)); it needs a PostgreSQL database and prints an **admin token** at its first start.
+
 ```bash
 cp .env.example .env        # the .env asset must exist to build
 flutter pub get
 flutter run -d chrome
 ```
+
+The dashboard opens on a sign-in page: enter the server's address (set `PORTAL_URL` in `.env` to prefill it) and **Sign in with GitHub**, or use the admin token while GitHub is not set up. Allow the dashboard's address in the server (`PORTAL_ALLOWED_ORIGINS`, `localhost` is always allowed) and, for GitHub, set the OAuth app's callback to the *server's* `/auth/github/callback`.
 
 ### Sharing with another machine (Tailscale / LAN)
 
@@ -78,41 +84,39 @@ flutter run -d chrome
 tool/serve_web.sh          # release build on 0.0.0.0:8080; pass a port to change it
 ```
 
-Then open `http://<your-tailscale-ip>:8080` on the other machine. Don't share a **debug** build (`flutter run -d chrome`): it waits for a debug websocket at `ws://0.0.0.0:<port>` that a remote browser can't reach, so the page stays blank and loading. Also allow that origin in Ollama (`OLLAMA_ORIGINS`) and in your MCP servers' CORS settings. Servers, settings and the audit log are stored per browser, so the other machine starts empty (the Ollama URL defaults from `.env`).
+Then open `http://<your-tailscale-ip>:8080` on the other machine and sign in to the same server: servers, rules, audit and conversations are all there already. Don't share a **debug** build (`flutter run -d chrome`): it waits for a debug websocket that a remote browser can't reach, so the page stays blank. Add the address you serve the dashboard from to the server's `PORTAL_ALLOWED_ORIGINS`.
 
 ### Gemma 4 through Ollama
 
 ```bash
 ollama pull gemma4          # use the exact tag shown by `ollama list`
-OLLAMA_ORIGINS="*" OLLAMA_HOST=0.0.0.0 ollama serve
+ollama serve
 ```
 
-`OLLAMA_ORIGINS` is required because this build runs in the browser and Ollama rejects cross-origin requests by default. Set the Ollama URL in `.env` (default for first launch) or in **Settings**. Use **Settings → Manage models** to discover installed models or type any name. The **context window** (default 16384 tokens, editable per provider) is sent as `num_ctx`: Ollama's own default is too small for the Operator's tool list. The model needs the `tools` capability for the Operator to call tools; Settings warns when a model reports it doesn't.
+Add a provider in **Settings → Models** with Ollama's address *as the server sees it* (`http://localhost:11434` when they share a machine, `http://host.docker.internal:11434` from a Docker container). The dashboard talks to the model through the server, so no `OLLAMA_ORIGINS` setting is needed. Use **Manage models** to discover installed models or type any name. The **context window** (default 16384 tokens, editable per provider) is sent as `num_ctx`: Ollama's own default is too small for the Operator's tool list. The model needs the `tools` capability for the Operator to call tools; Settings warns when a model reports it doesn't.
 
-Other endpoints: add an **OpenAI-compatible** provider (vLLM, LM Studio, llama.cpp server, OpenRouter, Ollama's `/v1`, …) with its `/v1` base URL and optional API key.
+Other endpoints: add an **OpenAI-compatible** provider (vLLM, LM Studio, llama.cpp server, OpenRouter, Ollama's `/v1`, …) with its `/v1` base URL and optional API key. Keys are stored on the server and never sent back to the dashboard.
 
 ### Connecting MCP servers
 
 Two HTTP transports are supported and detected automatically (**Transport: Auto-detect**, changeable per server):
 
 - **Streamable HTTP** (current spec): one endpoint, usually `/mcp`.
-- **Legacy HTTP+SSE** (spec 2024-11-05), still used by many servers and IDE bridges: the app opens `GET <url>` as an event stream, reads the `endpoint` event, and POSTs requests there. Its endpoint is usually `/sse`.
+- **Legacy HTTP+SSE** (spec 2024-11-05), still used by many servers and IDE bridges: the server opens `GET <url>` as an event stream, reads the `endpoint` event, and POSTs requests there. Its endpoint is usually `/sse`.
 
-If you enter a bare `host:port`, the app also tries `/mcp` and `/sse`, then remembers what worked (the card shows `…/sse` and an **SSE** badge). A URL ending in `/sse` goes straight to the legacy transport. A `401` stops the search and asks for credentials; any other failure lists every attempt it made. A message endpoint announced on a different origin is refused, so credentials are never sent elsewhere.
+If you enter a bare `host:port`, the server also tries `/mcp` and `/sse`, then remembers what worked (the card shows `…/sse` and an **SSE** badge). A URL ending in `/sse` goes straight to the legacy transport. A `401` stops the search and asks for credentials; any other failure lists every attempt it made. A message endpoint announced on a different origin is refused, so credentials are never sent elsewhere.
 
-Example: the **VS Code MCP Bridge** extension serves `http://127.0.0.1:3333/sse` and requires its `mcpServer.authToken` as a **bearer token**. Add `localhost:3333` (or the full `/sse` URL), choose **Bearer token** and paste the token.
+Servers must be reachable from the machine the **server** runs on (not from your browser), and need no CORS settings. Example: the **VS Code MCP Bridge** extension serves `http://127.0.0.1:3333/sse` and requires its `mcpServer.authToken` as a **bearer token**. Add `localhost:3333`, choose **Bearer token** and paste the token.
 
-Because the app runs in a browser, each server must also allow CORS for the app's origin and accept the `Authorization` header (plus `Mcp-Session-Id` / `MCP-Protocol-Version` for Streamable HTTP, exposing `Mcp-Session-Id` in `Access-Control-Expose-Headers`). A network error is reported with that hint, since a browser can't tell "refused" from "blocked by CORS".
+Header values and tokens are stored on the server and never shown again: editing a server shows that a value is stored, and leaving it empty keeps it.
 
 #### OAuth-protected servers
 
-Choose **OAuth** instead of a bearer token when adding a server. The app implements the MCP authorization flow: it follows the server's `401` / protected-resource metadata to its authorization server, registers itself there (dynamic client registration), and signs you in with authorization code + PKCE (S256) in a pop-up. Click **Sign in** on the server card; tokens are refreshed automatically and **Sign out** forgets them.
+Choose **OAuth** instead of a bearer token when adding a server. The server implements the MCP authorization flow: it follows the upstream's `401` / protected-resource metadata to its authorization server, registers itself there (dynamic client registration) and signs in with authorization code + PKCE (S256). Click **Sign in** on the server card; a pop-up opens the upstream's sign-in page. The tokens are kept on the server, refreshed automatically, and used for everyone (and for portal clients). **Sign out** forgets them.
 
-- **Redirect URI.** Sign-in returns to `<app origin>/oauth_callback.html` (shown, with a copy button, in the add-server dialog). The server's OAuth provider must allow that exact URI. Servers configured only for another client — for example ChatGPT connectors, which use `https://chatgpt.com/connector/oauth/*` — will reject this app until its URI is added, or until you enter a pre-registered **Client ID** (Advanced) that already allows it.
-- **CORS.** The authorization server's metadata, registration and token endpoints must allow requests from the app's origin, and the MCP server should expose `WWW-Authenticate` (the app falls back to well-known URLs if it can't read it).
-- **https.** Many providers only accept `https://` or `localhost` redirect URIs, so open the app via `localhost` or serve it over https rather than a plain-http LAN/Tailscale address.
+- **Redirect URI.** Sign-in returns to `<server address>/oauth/upstream/callback` (shown in the add-server dialog). The upstream's OAuth provider must allow that exact URI. Servers configured only for another client — for example ChatGPT connectors, which use `https://chatgpt.com/connector/oauth/*` — will reject it until it is added, or until you enter a pre-registered **Client ID** (Advanced) that already allows it.
+- **https.** Many providers only accept `https://` or `localhost` redirect URIs, so put the server behind https (or reach it as `localhost`).
 - **Pop-ups.** The browser must allow the sign-in pop-up (it opens from the button click).
-- Tokens and the registered client are stored in the browser's local storage, like bearer tokens.
 
 ## Project layout
 
@@ -121,11 +125,12 @@ lib/
   main.dart                  app bootstrap (env, prefs, providers)
   engine/                    no Flutter UI — all logic, unit-tested
     core/                    json, redaction, url normalising, env, prefs
-    mcp/                     Streamable HTTP + legacy SSE clients, auto-detect, server hub, OAuth, schema → argument template
-    llm/                     provider interface, Ollama + OpenAI-compatible, settings
-    agent/                   tool-calling loop, toolbox, approval flow, chat controller
-    audit/                   append-only log, stats
-    rules/, settings/        tool rules, Operator settings, backup / restore
+    server/                  the server client, sign-in session, live event stream
+    mcp/                     the server-backed hub (servers, tools, calls, OAuth sign-in)
+    llm/                     provider interface, Ollama + OpenAI-compatible (through the server's proxy), settings
+    agent/                   tool-calling loop, toolbox, approval flow, chat controller and store
+    audit/                   the audit log as the server recorded it, stats
+    rules/, settings/        tool rules (on the server), Operator settings (this browser)
   router/
     routes.dart, shell.dart  go_router + responsive shell (rail ≥ 900 px, drawer below)
     pages/<name>/<name>_page.dart   overview, servers, tools, chat, audit, settings, info (About), contributors
@@ -133,25 +138,25 @@ lib/
 test/                        engine tests + widget tests (incl. phone-width layout sweep)
 ```
 
-Rules, conversations, settings and the audit log live in `engine/` and are covered by tests; the pages only render them.
-
-State is managed with Riverpod and persisted in the browser (`shared_preferences`).
+The dashboard keeps no data of its own: the notifiers in `engine/` read from the server and write through to it, and the pages only render them. State is managed with Riverpod; this browser stores only the server's address, the sign-in, and a few preferences (`shared_preferences`).
 
 ## Checks
 
 ```bash
-flutter analyze
-flutter test
-flutter build web
+flutter analyze && flutter test                        # the dashboard, against an in-process server
+(cd server && dart analyze && dart test)               # the server (needs a Postgres, see server/README.md)
+(cd packages/mcp_core && dart test)
 ```
 
-The suite (332 tests) covers the engine, the MCP clients against fake servers (including session expiry and SSE), OAuth, rules, chat history, backups and the pages at desktop and phone widths.
+The dashboard tests run the real server in memory, so they exercise the app against it; the server tests also run against a throwaway Postgres (`TEST_DATABASE_URL`, or `docker run -d -e POSTGRES_PASSWORD=test -p 127.0.0.1:54329:5432 postgres:16-alpine`).
 
-## Limits and not-yet-ported features
+## Limits
 
-- Browser build only: no stdio MCP servers, and the app can't host MCP endpoints itself.
-- OAuth sign-in needs a browser that allows pop-ups; the in-app preview browser of some tools doesn't.
-- Not ported from the Node version: portals (published gateway endpoints), policies and tool overrides, investigations, mind map, OAuth *login to this app* (OAuth to MCP servers is supported), Postgres/pgvector, OpenTelemetry.
-- Server tokens and provider API keys are kept in the browser's local storage, and the `.env` asset is downloadable by anyone who can load the app — don't put secrets there, and don't expose a deployed build that holds real credentials.
-- Session errors such as "Session expired or does not exist" make the app re-initialise once, then try the sibling endpoint; the server card's trace shows what happened. Whether a particular server accepts this app's OAuth redirect URI is up to that server.
-- The audit log is capped at 1000 events and lives only in this browser.
+- Browser build only; MCP servers must be HTTP (no stdio), and the server must be able to reach them.
+- OAuth sign-in to an upstream needs a browser that allows pop-ups; the in-app preview browser of some tools doesn't.
+- The server stores upstream credentials, OAuth tokens and provider keys unencrypted in its database: protect the database and its backups. The `.env` asset is downloadable by anyone who can load the dashboard — don't put secrets there.
+- A model provider's address is resolved by the server, so it must be reachable from there (and the server can be pointed at internal addresses by anyone who may sign in: only let in people you trust).
+- Every signed-in member has the same rights (no roles yet); conversations are private to their author.
+- The dashboard loads the 1000 most recent audit events; older ones stay in the database.
+- Cancelling a model reply stops it at the provider on its next chunk, not instantly.
+- Not ported from the Node version: policies, investigations, mind map, pgvector, OpenTelemetry.

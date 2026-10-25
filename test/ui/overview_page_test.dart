@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -168,9 +166,9 @@ void main() {
       final now = DateTime.now();
       final events = [
         for (var i = 0; i < auditCapacity; i++)
-          _event(now.subtract(Duration(seconds: i)), 'e$i').toJson(),
+          _event(now.subtract(Duration(seconds: i)), 'e$i'),
       ];
-      await pumpApp(tester, prefs: {'mcpm.audit.v1': jsonEncode(events)});
+      await pumpApp(tester, audit: events);
 
       await tester.scrollUntilVisible(
         find.textContaining('The audit log is full'),

@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:mcp_manager/engine/audit/audit_log.dart';
 import 'package:mcp_manager/engine/mcp/mcp_auto_connection.dart';
 import 'package:mcp_manager/engine/mcp/mcp_hub.dart';
 import 'package:mcp_manager/engine/mcp/mcp_models.dart';
@@ -62,26 +63,17 @@ void main() {
 
   Future<ProviderContainer> open(
     WidgetTester tester, {
-    bool connected = true,
     Size size = const Size(1280, 900),
-    http.Client? client,
+    http.Client? reach,
     bool upstreamDown = false,
   }) async {
     await startGateway(upstreamDown: upstreamDown);
-    final prefs = connected
-        ? <String, Object>{
-            'mcpm.portal.v1':
-                '{"url":"$gatewayUrl","token":"$gatewayAdminToken"}',
-          }
-        : <String, Object>{};
     final c = await pumpApp(
       tester,
-      server: upstream,
+      gateway: gw,
       size: size,
-      prefs: prefs,
-      overrides: [
-        portalHttpClientProvider.overrideWithValue(client ?? gw.client),
-      ],
+      reach: reach,
+      defaultProvider: reach == null,
     );
     await goTo(tester, '/portals');
     return c;
@@ -92,222 +84,75 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  /// Puts the app's "Docs" server on the gateway and returns its id.
+  /// Adds a "Docs" server and returns its id.
   Future<String> publishDocs(ProviderContainer c) async {
     final runtime = await c
         .read(mcpHubProvider.notifier)
         .addServer(name: 'Docs', url: 'https://docs.test/mcp');
     await c.read(portalControllerProvider.notifier).refresh();
-    await c
-        .read(portalControllerProvider.notifier)
-        .publishServer(runtime.config);
     return runtime.config.id;
   }
 
-  group('before connecting', () {
-    testWidgets('Portals is in the navigation and asks for a gateway', (
-      tester,
-    ) async {
-      await open(tester, connected: false);
-      expect(find.text('Portals'), findsWidgets);
-      expect(find.text('Connect to a gateway'), findsOneWidget);
-      expect(
-        find.textContaining('dart run bin/mcp_portal.dart'),
-        findsOneWidget,
-      );
-      expect(find.widgetWithText(Tab, 'Servers'), findsNothing);
-    });
-
-    testWidgets('a wrong token shows the gateway\'s own message', (
-      tester,
-    ) async {
-      final c = await open(tester, connected: false);
-      await tester.enterText(_field('gateway-url'), gatewayUrl);
-      await tester.enterText(
-        _field('gateway-token'),
-        'wrong-wrong-wrong-wrong',
-      );
-      await tester.tap(_field('gateway-connect'));
-      await tester.pumpAndSettle();
-
-      expect(
-        find.text('The gateway rejected the admin token.'),
-        findsOneWidget,
-      );
-      expect(c.read(portalControllerProvider).settings.configured, isFalse);
-    });
-
-    testWidgets('an address that is not one is refused before any request', (
-      tester,
-    ) async {
-      await open(tester, connected: false);
-      await tester.enterText(_field('gateway-url'), 'not a url');
-      await tester.enterText(_field('gateway-token'), 'whatever');
-      await tester.tap(_field('gateway-connect'));
-      await tester.pumpAndSettle();
-      expect(find.textContaining('Enter the gateway address'), findsOneWidget);
-    });
-
-    testWidgets('the right token connects and shows the gateway', (
-      tester,
-    ) async {
-      final c = await open(tester, connected: false);
-      await tester.enterText(_field('gateway-url'), gatewayUrl);
-      await tester.enterText(_field('gateway-token'), gatewayAdminToken);
-      await tester.tap(_field('gateway-connect'));
-      await tester.pumpAndSettle();
-
+  group('opening the page', () {
+    testWidgets('shows the server and what it holds', (tester) async {
+      final c = await open(tester);
       expect(c.read(portalControllerProvider).connected, isTrue);
-      for (final name in ['Portals', 'Servers', 'Access', 'Activity']) {
+      for (final name in ['Portals', 'Access']) {
         expect(find.widgetWithText(Tab, name), findsOneWidget);
       }
+      expect(find.widgetWithText(Tab, 'Servers'), findsNothing);
+      expect(find.widgetWithText(Tab, 'Activity'), findsNothing);
       expect(
-        find.textContaining('Gateway $gatewayUrl · v1.0.0'),
+        find.textContaining('Server $gatewayUrl · v1.0.0'),
         findsOneWidget,
       );
       expect(find.text('No portals yet'), findsOneWidget);
     });
 
-    testWidgets('a saved gateway that does not answer offers a retry', (
-      tester,
-    ) async {
+    testWidgets('a server that does not answer offers a retry', (tester) async {
       final down = MockClient(
         (_) async => throw http.ClientException('connection refused'),
       );
-      await open(tester, client: down);
-      expect(find.text('Gateway not reachable'), findsOneWidget);
-      expect(
-        find.textContaining('Could not reach the gateway'),
-        findsOneWidget,
-      );
+      await open(tester, reach: down);
+      expect(find.text('Server not reachable'), findsOneWidget);
+      expect(find.textContaining('Could not reach'), findsOneWidget);
       expect(_field('gateway-retry'), findsOneWidget);
-      expect(_field('gateway-edit'), findsOneWidget);
     });
 
-    testWidgets('a saved gateway that rejects the token says so', (
+    testWidgets('servers added on the Servers page can go in a portal', (
       tester,
     ) async {
-      final c = await pumpApp(
-        tester,
-        server: upstream,
-        prefs: {
-          'mcpm.portal.v1':
-              '{"url":"$gatewayUrl","token":"revoked-revoked-revoked"}',
-        },
-        overrides: [portalHttpClientProvider.overrideWithValue(gw.client)],
-      );
-      await goTo(tester, '/portals');
-      expect(
-        find.text('The gateway rejected the admin token.'),
-        findsOneWidget,
-      );
-      expect(
-        c.read(portalControllerProvider).connection,
-        PortalConnection.failed,
-      );
-    });
-  });
-
-  group('servers', () {
-    testWidgets('an app server can be put on the gateway', (tester) async {
       final c = await open(tester);
-      final hub = c.read(mcpHubProvider.notifier);
-      final runtime = await hub.addServer(
-        name: 'Docs',
-        url: 'https://docs.test/mcp',
-        headers: {'Authorization': 'Bearer abc'},
-      );
-      await tab(tester, 'Servers');
-
-      expect(find.text('Put on gateway'), findsOneWidget);
-      await tester.tap(_field('publish-${runtime.config.id}'));
+      expect(find.text('No portals yet'), findsOneWidget);
+      expect(find.textContaining('Add some MCP servers first'), findsOneWidget);
+      await publishDocs(c);
       await tester.pumpAndSettle();
-
-      expect(find.text('On gateway'), findsOneWidget);
-      expect(_field('gateway-server-${runtime.config.id}'), findsOneWidget);
-      expect(find.textContaining('Tools are named docs__'), findsOneWidget);
-      expect(find.textContaining('1 header stored'), findsOneWidget);
-      expect(gw.state.servers.single.headers, {'Authorization': 'Bearer abc'});
+      expect(find.textContaining('Add some MCP servers first'), findsNothing);
     });
 
-    testWidgets('a server that needs OAuth cannot be put on a gateway', (
-      tester,
-    ) async {
+    testWidgets('a server that needs OAuth can be in a portal', (tester) async {
       final c = await open(tester);
-      await c
+      final runtime = await c
           .read(mcpHubProvider.notifier)
           .addServer(
-            name: 'Signed in',
-            url: 'https://oauth.test/mcp',
+            name: 'Protected',
+            url: 'https://mcp.test/mcp',
             oauth: true,
           );
-      await tab(tester, 'Servers');
-      expect(find.text('OAuth'), findsOneWidget);
-      expect(find.textContaining('A gateway cannot use it'), findsOneWidget);
-      expect(find.text('Put on gateway'), findsNothing);
-    });
-
-    testWidgets('a gateway server can be tested', (tester) async {
-      final c = await open(tester);
-      final id = await publishDocs(c);
-      await tab(tester, 'Servers');
-
-      await tester.tap(_field('test-$id'));
-      await tester.pumpAndSettle();
-
-      expect(
-        find.text('2 tools · fake 1.2.3 · streamable-http'),
-        findsOneWidget,
-      );
-    });
-
-    testWidgets('a gateway server that cannot be reached shows why', (
-      tester,
-    ) async {
-      final c = await open(tester, upstreamDown: true);
-      final id = await publishDocs(c);
-      await tab(tester, 'Servers');
-
-      await tester.tap(_field('test-$id'));
-      await tester.pumpAndSettle();
-
-      expect(find.textContaining('Could not connect:'), findsOneWidget);
-      expect(find.textContaining('connection refused'), findsWidgets);
-    });
-
-    testWidgets('removing a server names the portals it leaves', (
-      tester,
-    ) async {
-      final c = await open(tester);
-      final id = await publishDocs(c);
+      await c.read(portalControllerProvider.notifier).refresh();
       await c
           .read(portalControllerProvider.notifier)
-          .savePortal(name: 'Dev', servers: [GatewayPortalServer(id)]);
-      await tab(tester, 'Servers');
-
-      await tester.tap(_field('remove-$id'));
-      await tester.pumpAndSettle();
-      expect(find.textContaining('also taken out of Dev'), findsOneWidget);
-      await tester.tap(_field('confirm-remove-server'));
-      await tester.pumpAndSettle();
-
-      expect(gw.state.servers, isEmpty);
-      expect(find.text('The gateway has no servers yet.'), findsOneWidget);
-    });
-
-    testWidgets('the app\'s tool rules can be sent', (tester) async {
-      await open(tester);
-      await tab(tester, 'Servers');
-      expect(
-        find.textContaining('This app: 0 rules, 0 per-tool settings'),
-        findsOneWidget,
-      );
-      await tester.tap(_field('push-rules'));
+          .savePortal(
+            name: 'Dev',
+            slug: 'dev',
+            servers: [GatewayPortalServer(runtime.config.id)],
+          );
       await tester.pumpAndSettle();
       expect(
-        find.textContaining('Sent 0 rules and 0 per-tool settings'),
-        findsOneWidget,
+        gw.state.portals.single.servers.single.serverId,
+        runtime.config.id,
       );
+      expect(find.text('Dev'), findsOneWidget);
     });
   });
 
@@ -591,8 +436,8 @@ void main() {
     });
   });
 
-  group('activity', () {
-    testWidgets('lists the calls clients made, with their detail', (
+  group('what clients do', () {
+    testWidgets('shows on the Audit page as coming through a portal', (
       tester,
     ) async {
       final c = await open(tester);
@@ -622,102 +467,12 @@ void main() {
       await connection.connect();
       await connection.callTool('docs__lookup', {'q': 'report'});
 
-      await tab(tester, 'Activity');
+      await goTo(tester, '/audit');
+      await c.read(auditLogProvider.notifier).reload();
+      await tester.pumpAndSettle();
       expect(find.text('Docs · lookup'), findsOneWidget);
       expect(find.textContaining('client'), findsWidgets);
-      expect(find.text('success'), findsWidgets);
-
-      await tester.tap(find.text('Docs · lookup'));
-      await tester.pumpAndSettle();
-      expect(find.text('Arguments'), findsOneWidget);
-      expect(find.text('Result'), findsOneWidget);
-      expect(find.text('access token'), findsOneWidget);
-    });
-
-    testWidgets('start empty and say what will appear', (tester) async {
-      await open(tester);
-      await tab(tester, 'Activity');
-      expect(find.text('No calls yet'), findsOneWidget);
-    });
-
-    testWidgets('can be narrowed by status', (tester) async {
-      final c = await open(tester);
-      final id = await publishDocs(c);
-      await c
-          .read(portalControllerProvider.notifier)
-          .savePortal(
-            name: 'Dev',
-            slug: 'dev',
-            servers: [GatewayPortalServer(id)],
-          );
-      final secret =
-          (await c
-                  .read(portalControllerProvider.notifier)
-                  .createToken(name: 'client'))
-              .secret;
-      final connection = createMcpConnection(
-        McpServerConfig(
-          id: 'p',
-          name: 'p',
-          url: '$gatewayUrl/mcp/dev',
-          headers: {'Authorization': 'Bearer $secret'},
-          transport: McpTransport.streamableHttp,
-        ),
-        httpClient: gw.client,
-      );
-      await connection.connect();
-      await connection.callTool('docs__lookup', {'q': 'a'});
-      // The client is told, and the gateway records, a call it cannot serve.
-      await expectLater(
-        connection.callTool('docs__nothing', {}),
-        throwsA(isA<McpException>()),
-      );
-
-      await tab(tester, 'Activity');
-      expect(find.text('Docs · lookup'), findsOneWidget);
-      await tester.tap(_field('activity-success'));
-      await tester.pumpAndSettle();
-      expect(find.text('Docs · lookup'), findsOneWidget);
-      await tester.tap(_field('activity-success'));
-      await tester.tap(_field('activity-denied'));
-      await tester.pumpAndSettle();
-      expect(find.text('Docs · lookup'), findsNothing);
-    });
-  });
-
-  group('the connection', () {
-    testWidgets('can be dropped, and the gateway stays as it was', (
-      tester,
-    ) async {
-      final c = await open(tester);
-      await c
-          .read(portalControllerProvider.notifier)
-          .savePortal(name: 'Dev', slug: 'dev');
-      await tester.pumpAndSettle();
-
-      await tester.tap(_field('portals-menu'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Disconnect'));
-      await tester.pumpAndSettle();
-      await tester.tap(_field('confirm-disconnect'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Connect to a gateway'), findsOneWidget);
-      expect(c.read(portalControllerProvider).settings.configured, isFalse);
-      expect(gw.state.portals, hasLength(1));
-    });
-
-    testWidgets('can be changed without losing the address', (tester) async {
-      await open(tester);
-      await tester.tap(_field('portals-menu'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Change address or token'));
-      await tester.pumpAndSettle();
-      expect(find.text('Connect to a gateway'), findsOneWidget);
-      expect(
-        tester.widget<TextField>(_field('gateway-url')).controller!.text,
-        gatewayUrl,
-      );
+      expect(find.textContaining('Portal'), findsWidgets);
     });
 
     testWidgets('the page fits a phone', (tester) async {
@@ -732,10 +487,8 @@ void main() {
           );
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
-      for (final name in ['Servers', 'Access', 'Activity']) {
-        await tab(tester, name);
-        expect(tester.takeException(), isNull, reason: name);
-      }
+      await tab(tester, 'Access');
+      expect(tester.takeException(), isNull);
     });
 
     testWidgets('the route is /portals', (tester) async {

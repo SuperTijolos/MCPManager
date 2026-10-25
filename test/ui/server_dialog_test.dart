@@ -162,9 +162,8 @@ void main() {
       await tester.pumpAndSettle();
       await _tapVisible(tester, find.text('Add & connect'));
 
-      expect(c.read(mcpHubProvider).servers.single.config.headers, {
-        'X-Api-Key': 'abc',
-      });
+      await tester.pumpAndSettle();
+      expect(gatewayOf(c).state.servers.single.headers, {'X-Api-Key': 'abc'});
     });
 
     testWidgets(
@@ -187,8 +186,66 @@ void main() {
           find.widgetWithText(TextFormField, 'Authorization'),
           findsNothing,
         );
+        // The server never sends a value back: the row says one is stored.
+        expect(
+          find.widgetWithText(
+            TextFormField,
+            'Stored on the server (leave empty to keep)',
+          ),
+          findsOneWidget,
+        );
+        expect(find.textContaining('blue'), findsNothing);
       },
     );
+
+    testWidgets('saving without touching a stored value keeps it', (
+      tester,
+    ) async {
+      final c = await _open(tester);
+      await c
+          .read(mcpHubProvider.notifier)
+          .addServer(
+            name: 'Demo',
+            url: 'https://mcp.test/mcp',
+            headers: {'X-Team': 'blue'},
+          );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Edit'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Demo'),
+        'Renamed',
+      );
+      await _tapVisible(tester, find.text('Save'));
+      await tester.pumpAndSettle();
+      final saved = gatewayOf(c).state.servers.single;
+      expect(saved.name, 'Renamed');
+      expect(saved.headers, {'X-Team': 'blue'});
+    });
+
+    testWidgets('typing over a stored value replaces it', (tester) async {
+      final c = await _open(tester);
+      await c
+          .read(mcpHubProvider.notifier)
+          .addServer(
+            name: 'Demo',
+            url: 'https://mcp.test/mcp',
+            headers: {'X-Team': 'blue'},
+          );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Edit'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.widgetWithText(
+          TextFormField,
+          'Stored on the server (leave empty to keep)',
+        ),
+        'green',
+      );
+      await _tapVisible(tester, find.text('Save'));
+      await tester.pumpAndSettle();
+      expect(gatewayOf(c).state.servers.single.headers, {'X-Team': 'green'});
+    });
   });
 
   group('bearer token', () {
@@ -224,15 +281,51 @@ void main() {
         await tester.tap(find.text('Add & connect'));
         await tester.pumpAndSettle();
         expect(
-          c.read(mcpHubProvider).servers.single.config.headers['Authorization'],
+          gatewayOf(c).state.servers.single.headers['Authorization'],
           'Bearer secret-token-123',
         );
       },
     );
 
-    testWidgets('editing a server with a token pre-fills it (hidden)', (
-      tester,
-    ) async {
+    testWidgets(
+      'editing a server with a token says it is stored, not what it is',
+      (tester) async {
+        final c = await _open(tester);
+        await c
+            .read(mcpHubProvider.notifier)
+            .addServer(
+              name: 'Demo',
+              url: 'https://mcp.test/mcp',
+              headers: {'Authorization': 'Bearer tok-123'},
+            );
+        await tester.pumpAndSettle();
+        await tester.tap(find.byTooltip('Edit'));
+        await tester.pumpAndSettle();
+        final editable = tester.widget<EditableText>(
+          find.descendant(
+            of: field('Bearer token'),
+            matching: find.byType(EditableText),
+          ),
+        );
+        expect(editable.controller.text, isEmpty);
+        expect(editable.obscureText, isTrue);
+        expect(
+          find.textContaining('A token is stored on the server'),
+          findsOneWidget,
+        );
+        expect(find.textContaining('tok-123'), findsNothing);
+
+        // Saving with the field empty keeps the stored token.
+        await _tapVisible(tester, find.text('Save'));
+        await tester.pumpAndSettle();
+        expect(
+          gatewayOf(c).state.servers.single.headers['Authorization'],
+          'Bearer tok-123',
+        );
+      },
+    );
+
+    testWidgets('a new token replaces the stored one', (tester) async {
       final c = await _open(tester);
       await c
           .read(mcpHubProvider.notifier)
@@ -244,14 +337,13 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('Edit'));
       await tester.pumpAndSettle();
-      final editable = tester.widget<EditableText>(
-        find.descendant(
-          of: field('Bearer token'),
-          matching: find.byType(EditableText),
-        ),
+      await tester.enterText(field('Bearer token'), 'tok-456');
+      await _tapVisible(tester, find.text('Save'));
+      await tester.pumpAndSettle();
+      expect(
+        gatewayOf(c).state.servers.single.headers['Authorization'],
+        'Bearer tok-456',
       );
-      expect(editable.controller.text, 'tok-123');
-      expect(editable.obscureText, isTrue);
     });
   });
 

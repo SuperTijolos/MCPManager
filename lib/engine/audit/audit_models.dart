@@ -4,7 +4,9 @@ enum AuditKind { toolCall, serverConnect, authorize, manage }
 
 enum AuditStatus { success, error, denied }
 
-enum AuditSource { workbench, operator, system }
+/// Where a call came from: the Tools page, the chat, the gateway itself, or an
+/// MCP client that used a portal.
+enum AuditSource { workbench, operator, system, portal }
 
 /// One append-only record of something MCP Manager did. Arguments and results
 /// are stored redacted and size-limited; the original values are never kept.
@@ -27,6 +29,7 @@ class AuditEvent {
     this.error,
     this.approval,
     this.conversationId,
+    this.portalSlug,
   });
 
   final String id;
@@ -60,6 +63,9 @@ class AuditEvent {
   /// The chat conversation that made the call, when one did.
   final String? conversationId;
 
+  /// The portal an MCP client used, for calls that came through one.
+  final String? portalSlug;
+
   Json toJson() => {
     'id': id,
     'ts': timestamp.toIso8601String(),
@@ -78,6 +84,7 @@ class AuditEvent {
     if (error != null) 'error': error,
     if (approval != null) 'approval': approval,
     if (conversationId != null) 'conv': conversationId,
+    if (portalSlug != null) 'portal': portalSlug,
   };
 
   factory AuditEvent.fromJson(Json json) => AuditEvent(
@@ -98,7 +105,43 @@ class AuditEvent {
     error: json['error'] as String?,
     approval: json['approval'] as String?,
     conversationId: json['conv'] as String?,
+    portalSlug: json['portal'] as String?,
   );
+
+  /// An event as the server stores it.
+  factory AuditEvent.fromServer(Json json) {
+    final principal = ((json['principal'] as Map?) ?? const {})
+        .cast<String, dynamic>();
+    final source = switch (json['source']) {
+      'dashboard' => AuditSource.workbench,
+      'chat' => AuditSource.operator,
+      'system' => AuditSource.system,
+      _ => AuditSource.portal,
+    };
+    return AuditEvent(
+      id: json['id'] as String,
+      timestamp: DateTime.parse(json['ts'] as String).toLocal(),
+      kind: AuditKind.values.byName(json['kind'] as String? ?? 'toolCall'),
+      status: AuditStatus.values.byName(json['status'] as String? ?? 'error'),
+      source: source,
+      actor:
+          json['actor'] as String? ??
+          principal['name'] as String? ??
+          (source == AuditSource.workbench ? 'user' : 'unknown'),
+      serverId: json['serverId'] as String?,
+      serverName: json['serverName'] as String?,
+      toolName: json['tool'] as String? ?? json['exposedName'] as String?,
+      durationMs: (json['durationMs'] as num?)?.toInt(),
+      args: json['args'] as String?,
+      forwarded: json['forwarded'] as String?,
+      context: json['context'] as String?,
+      result: json['result'] as String?,
+      error: json['error'] as String?,
+      approval: json['approval'] as String?,
+      conversationId: json['conversationId'] as String?,
+      portalSlug: json['portalSlug'] as String?,
+    );
+  }
 
   String get title => switch (kind) {
     AuditKind.toolCall => '${serverName ?? '?'} · ${toolName ?? '?'}',

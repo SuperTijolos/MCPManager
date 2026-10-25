@@ -7,15 +7,23 @@ import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:mcp_manager/engine/audit/audit_log.dart';
+import 'package:mcp_manager/engine/core/ids.dart';
+import 'package:mcp_manager/engine/audit/audit_models.dart';
 import 'package:mcp_manager/engine/core/json.dart';
+import 'package:mcp_portal_server/mcp_portal_server.dart'
+    show GatewayAuditEvent;
 import 'package:mcp_manager/engine/core/prefs.dart';
 import 'package:mcp_manager/engine/llm/llm_settings.dart';
 import 'package:mcp_manager/engine/llm/llm_types.dart';
-import 'package:mcp_manager/engine/mcp/mcp_hub.dart';
-import 'package:mcp_manager/engine/mcp/oauth/oauth_models.dart';
-import 'package:mcp_manager/engine/mcp/oauth/oauth_popup.dart';
-import 'package:mcp_manager/engine/mcp/oauth/oauth_service.dart';
+import 'package:mcp_manager/engine/llm/provider_config.dart';
+import 'package:mcp_manager/engine/server/server_events.dart';
+import 'package:mcp_manager/engine/server/platform.dart';
+import 'package:mcp_manager/engine/server/session.dart';
+import 'package:mcp_manager/ui/sign_in.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'gateway_harness.dart';
 
 class FakeMcpServer {
   FakeMcpServer({
@@ -156,32 +164,182 @@ class ScriptedLlm implements LlmProvider {
   void close() => closed = true;
 }
 
+/// Signed in to the in-process server from the first frame, without the
+/// check round trip (which is the session's own business, tested on its own).
+class SignedInSession extends SessionNotifier {
+  SignedInSession(this.url, this.token);
+  final String url;
+  final String token;
+
+  @override
+  SessionState build() => SessionState(
+    status: SessionStatus.signedIn,
+    serverUrl: url,
+    token: token,
+    identity: const SessionIdentity(kind: 'admin'),
+  );
+}
+
+final _gateways = Expando<TestGateway>();
+
+/// Remembers the server behind [container] for [gatewayOf].
+void registerGateway(ProviderContainer container, TestGateway gateway) =>
+    _gateways[container] = gateway;
+
+/// An audit log whose [record] writes straight into the in-process server's
+/// log (any kind, source or time) and reloads, so tests can stage the history
+/// a page should show without going through the real producers.
+class TestAuditLog extends AuditLog {
+  TestAuditLog(this.gateway);
+  final TestGateway gateway;
+
+  @override
+  Future<void> record({
+    required AuditKind kind,
+    required AuditStatus status,
+    required AuditSource source,
+    required String actor,
+    String? serverId,
+    String? serverName,
+    String? toolName,
+    int? durationMs,
+    String? args,
+    String? result,
+    String? error,
+    String? approval,
+    String? conversationId,
+  }) async {
+    await seedAudit(gateway, [
+      AuditEvent(
+        id: newId('evt'),
+        timestamp: DateTime.now(),
+        kind: kind,
+        status: status,
+        source: source,
+        actor: actor,
+        serverId: serverId,
+        serverName: serverName,
+        toolName: toolName,
+        durationMs: durationMs,
+        args: args,
+        result: result,
+        error: error,
+        approval: approval,
+        conversationId: conversationId,
+      ),
+    ]);
+    await reload();
+  }
+}
+
+/// Puts [events] in the server's audit log, as if they had happened.
+Future<void> seedAudit(TestGateway gateway, List<AuditEvent> events) async {
+  for (final e in events) {
+    await gateway.server.audit.record(
+      GatewayAuditEvent(
+        id: e.id,
+        timestamp: e.timestamp,
+        source: switch (e.source) {
+          AuditSource.workbench => 'dashboard',
+          AuditSource.operator => 'chat',
+          AuditSource.system => 'system',
+          AuditSource.portal => 'portal',
+        },
+        kind: e.kind.name,
+        principal: const {'kind': 'admin', 'id': 'admin', 'name': 'Admin'},
+        status: e.status.name,
+        actor: e.actor,
+        approval: e.approval,
+        serverId: e.serverId,
+        serverName: e.serverName,
+        tool: e.toolName,
+        durationMs: e.durationMs,
+        args: e.args,
+        forwarded: e.forwarded,
+        context: e.context,
+        result: e.result,
+        error: e.error,
+        conversationId: e.conversationId,
+      ),
+    );
+  }
+}
+
+/// The in-process server a container from [makeContainer] talks to.
+TestGateway gatewayOf(ProviderContainer container) => _gateways[container]!;
+
+/// Overrides that put the app on [gateway], signed in. [reach] is what the
+/// app talks to the server through (the in-process server unless a test wants
+/// the network to fail); [liveEvents] turns the event stream on.
+List<Override> signedInOverrides(
+  TestGateway gateway, {
+  http.Client? reach,
+  bool liveEvents = false,
+}) => [
+  sessionProvider.overrideWith(
+    () => SignedInSession(gatewayUrl, gatewayAdminToken),
+  ),
+  serverHttpClientProvider.overrideWithValue(() => reach ?? gateway.client),
+  serverEventsEnabledProvider.overrideWithValue(liveEvents),
+];
+
+/// The provider a first run would have offered: Ollama with Gemma 4.
+Future<void> seedDefaultProvider(ProviderContainer container) async {
+  final settings = container.read(llmSettingsProvider.notifier);
+  await settings.loaded;
+  if (container.read(llmSettingsProvider).providers.isNotEmpty) return;
+  await settings.upsert(
+    const ProviderConfig(
+      id: 'llm_default',
+      name: 'Ollama',
+      kind: ProviderKind.ollama,
+      baseUrl: defaultOllamaUrl,
+      models: [defaultOllamaModel],
+    ),
+  );
+}
+
+/// The app's state on a fresh in-process server. [server] (or [httpClient])
+/// is what the server's own MCP servers answer with.
 Future<ProviderContainer> makeContainer({
   FakeMcpServer? server,
   LlmProvider? llm,
   http.Client? httpClient,
-  OAuthPopup Function()? popupOpener,
+  TestGateway? gateway,
+  AuthPopup Function()? popupOpener,
+  bool defaultProvider = true,
+  bool liveEvents = false,
+  bool realAuditLog = false,
+  http.Client? reach,
+  List<AuditEvent> audit = const [],
+  Future<void> Function(TestGateway gateway)? setup,
   Map<String, Object> prefs = const {},
   List<Override> overrides = const [],
 }) async {
   SharedPreferences.setMockInitialValues(prefs);
   final sp = await SharedPreferences.getInstance();
+  final gw =
+      gateway ??
+      await TestGateway.start(
+        upstream: server,
+        upstreamClient: httpClient == null ? null : () => httpClient,
+      );
+  addTearDown(gw.client.close);
+  await seedAudit(gw, audit);
+  await setup?.call(gw);
   final container = ProviderContainer(
     overrides: [
       sharedPreferencesProvider.overrideWithValue(sp),
-      // Tests call checkHealth() themselves instead of waiting on a timer.
-      mcpHealthIntervalProvider.overrideWithValue(null),
-      oauthRedirectUriProvider.overrideWithValue(Uri.parse(oauthRedirect)),
+      ...signedInOverrides(gw, reach: reach, liveEvents: liveEvents),
+      if (!realAuditLog) auditLogProvider.overrideWith(() => TestAuditLog(gw)),
       if (popupOpener != null)
-        oauthPopupOpenerProvider.overrideWithValue(popupOpener),
-      if (server != null || httpClient != null)
-        mcpHttpClientFactoryProvider.overrideWithValue(
-          () => httpClient ?? server!.client,
-        ),
+        authPopupOpenerProvider.overrideWithValue(popupOpener),
       if (llm != null) llmProviderFactoryProvider.overrideWithValue((_) => llm),
       ...overrides,
     ],
   );
+  _gateways[container] = gw;
+  if (defaultProvider) await seedDefaultProvider(container);
   return container;
 }
 
@@ -189,7 +347,9 @@ Future<ProviderContainer> makeContainer({
 // OAuth
 
 const oauthMcpUrl = 'https://mcp.test/mcp';
-const oauthRedirect = 'https://app.test/oauth_callback.html';
+
+/// Where the upstream sends the browser back: the server's own callback.
+const oauthRedirect = '$gatewayUrl/oauth/upstream/callback';
 
 /// An MCP server protected by OAuth, plus its authorization server, behind one
 /// mock HTTP client. Mirrors the MCP authorization spec: 401 +
@@ -366,46 +526,49 @@ class FakeOAuthWorld {
 }
 
 /// A sign-in window driven by the test: records the URL it was sent to and
-/// answers like the authorization server's redirect would.
-class FakePopup implements OAuthPopup {
-  FakePopup(this._respond);
+/// does what the person and the upstream would, ending with the browser
+/// arriving at the server's callback.
+class FakePopup implements AuthPopup {
+  FakePopup(this._onNavigate);
 
-  final Map<String, String> Function(Uri url) _respond;
+  final Future<void> Function(Uri url) _onNavigate;
   final navigated = <Uri>[];
-  bool closed = false;
-  final _result = Completer<Map<String, String>>();
+  bool isClosed = false;
+  final _closed = Completer<void>();
 
-  /// Approves every request.
-  factory FakePopup.approving(FakeOAuthWorld world) =>
-      FakePopup(world.authorize);
+  /// The person approves every request.
+  factory FakePopup.approving(FakeOAuthWorld world, TestGateway gateway) =>
+      FakePopup((url) => _callback(gateway, world.authorize(url)));
 
-  factory FakePopup.denying(FakeOAuthWorld world) =>
-      FakePopup((u) => world.authorize(u, deny: true));
+  factory FakePopup.denying(FakeOAuthWorld world, TestGateway gateway) =>
+      FakePopup((url) => _callback(gateway, world.authorize(url, deny: true)));
 
-  factory FakePopup.wrongState(FakeOAuthWorld world) =>
-      FakePopup((u) => world.authorize(u, stateOverride: 'forged'));
+  /// The person closes the window without finishing.
+  factory FakePopup.closedByUser() => FakePopup((_) async {})..close();
 
-  /// The user closes the window without finishing.
-  factory FakePopup.closedByUser() => FakePopup(
-    (_) =>
-        throw OAuthException('The sign-in window was closed before finishing.'),
-  );
+  static Future<void> _callback(
+    TestGateway gateway,
+    Map<String, String> params,
+  ) async {
+    await gateway.client.get(
+      Uri.parse(oauthRedirect).replace(queryParameters: params),
+    );
+  }
 
   @override
   void navigate(Uri url) {
     navigated.add(url);
-    try {
-      _result.complete(_respond(url));
-    } on OAuthException catch (e) {
-      _result.completeError(e);
-    }
+    unawaited(_onNavigate(url));
   }
 
   @override
-  Future<Map<String, String>> get result => _result.future;
+  Future<void> get closed => _closed.future;
 
   @override
-  void close() => closed = true;
+  void close() {
+    isClosed = true;
+    if (!_closed.isCompleted) _closed.complete();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -697,4 +860,10 @@ Future<http.StreamedResponse> forwardTo(
     ..headers.addAll(request.headers)
     ..bodyBytes = await bodyStream.toBytes();
   return target.send(copy);
+}
+
+/// A session that is not signed in.
+class SessionNotifierSignedOut extends SessionNotifier {
+  @override
+  SessionState build() => const SessionState();
 }

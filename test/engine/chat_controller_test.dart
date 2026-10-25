@@ -59,7 +59,7 @@ Future<ProviderContainer> _setup(
   await container
       .read(mcpHubProvider.notifier)
       .addServer(name: 'Demo', url: 'https://mcp.test/mcp');
-  container.read(auditLogProvider.notifier).clear();
+  await container.read(auditLogProvider.notifier).clear();
   return container;
 }
 
@@ -116,13 +116,13 @@ void main() {
       final secondId = container.read(chatControllerProvider).activeId!;
       controller.setAutoApprove(false);
 
-      controller.open(firstId);
+      await controller.open(firstId);
       expect(
         container.read(chatControllerProvider).autoApprove,
         isTrue,
         reason: 'the first chat kept automatic mode',
       );
-      controller.open(secondId);
+      await controller.open(secondId);
       expect(
         container.read(chatControllerProvider).autoApprove,
         isFalse,

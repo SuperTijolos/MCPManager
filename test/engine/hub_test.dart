@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -7,8 +5,11 @@ import 'package:mcp_manager/engine/audit/audit_log.dart';
 import 'package:mcp_manager/engine/audit/audit_models.dart';
 import 'package:mcp_manager/engine/audit/audit_stats.dart';
 import 'package:mcp_manager/engine/mcp/mcp_hub.dart';
+import 'package:mcp_portal_server/mcp_portal_server.dart'
+    show GatewayAuditEvent;
 
 import '../support/fakes.dart';
+import '../support/gateway_harness.dart';
 
 final _tools = [
   {
@@ -46,6 +47,7 @@ void main() {
       expect(audit, hasLength(1));
       expect(audit.single.kind, AuditKind.serverConnect);
       expect(audit.single.status, AuditStatus.success);
+      expect(audit.single.source, AuditSource.system);
     },
   );
 
@@ -70,9 +72,11 @@ void main() {
     expect(event.status, AuditStatus.error);
   });
 
-  test('configs persist and reload on next start', () async {
-    final server = FakeMcpServer(tools: _tools);
-    final first = await makeContainer(server: server);
+  test('servers live on the server and reload on next start', () async {
+    final gateway = await TestGateway.start(
+      upstream: FakeMcpServer(tools: _tools),
+    );
+    final first = await makeContainer(gateway: gateway);
     await first
         .read(mcpHubProvider.notifier)
         .addServer(
@@ -80,28 +84,45 @@ void main() {
           url: 'https://mcp.test/mcp',
           headers: {'Authorization': 'Bearer abc'},
         );
-    final stored = first.read(mcpHubProvider).servers.single.config;
+    first.dispose();
 
-    // Second container sharing the same persisted prefs.
-    final prefs = <String, Object>{
-      'mcpm.servers.v1': '[${_json(stored.toJson())}]',
-    };
-    final second = await makeContainer(
-      server: FakeMcpServer(tools: _tools),
-      prefs: prefs,
-    );
+    // A new session on the same server: nothing is kept in the browser.
+    final second = await makeContainer(gateway: gateway);
     addTearDown(second.dispose);
+    final hub = second.read(mcpHubProvider.notifier);
+    await hub.loaded;
     final state = second.read(mcpHubProvider);
     expect(state.servers.single.config.name, 'Demo');
-    expect(state.servers.single.config.headers['Authorization'], 'Bearer abc');
-
-    // Enabled servers reconnect automatically on startup.
-    await pumpEventQueue();
+    // The server never sends a header value back, only that there is one.
+    expect(state.servers.single.config.headers.keys, ['Authorization']);
     expect(
-      second.read(mcpHubProvider).servers.single.status,
-      ServerStatus.connected,
+      state.servers.single.config.headers['Authorization'],
+      maskedHeaderValue,
     );
-    first.dispose();
+    expect(state.servers.single.status, ServerStatus.connected);
+    expect(gateway.state.servers.single.headers['Authorization'], 'Bearer abc');
+  });
+
+  test('editing leaves a masked header alone and changes the others', () async {
+    final container = await makeContainer(server: FakeMcpServer(tools: _tools));
+    addTearDown(container.dispose);
+    final hub = container.read(mcpHubProvider.notifier);
+    final runtime = await hub.addServer(
+      name: 'Demo',
+      url: 'https://mcp.test/mcp',
+      headers: {'Authorization': 'Bearer abc', 'X-Team': 'one'},
+    );
+    final stored = container.read(mcpHubProvider).servers.single.config;
+    expect(stored.headers.values.toSet(), {maskedHeaderValue});
+
+    await hub.updateServer(
+      stored.copyWith(headers: {...stored.headers, 'X-Team': 'two'}),
+    );
+    final gateway = gatewayOf(container);
+    expect(gateway.state.server(runtime.config.id)!.headers, {
+      'Authorization': 'Bearer abc',
+      'X-Team': 'two',
+    });
   });
 
   test('callTool records a redacted audit event with provenance', () async {
@@ -132,14 +153,41 @@ void main() {
     expect(event.status, AuditStatus.success);
     expect(event.actor, 'operator:gemma4');
     expect(event.approval, 'user');
+    expect(event.source, AuditSource.operator);
     expect(event.serverName, 'Demo');
     expect(event.args, isNot(contains('super-secret')));
     expect(event.args, contains('[redacted]'));
     expect(event.result, contains('echo hi'));
   });
 
+  test('a call from the Tools page is recorded as the workbench\'s', () async {
+    final container = await makeContainer(
+      server: FakeMcpServer(
+        tools: _tools,
+        handlers: {'echo': (_) => textResult('ok')},
+      ),
+    );
+    addTearDown(container.dispose);
+    final hub = container.read(mcpHubProvider.notifier);
+    final runtime = await hub.addServer(
+      name: 'Demo',
+      url: 'https://mcp.test/mcp',
+    );
+    await hub.callTool(
+      serverId: runtime.config.id,
+      toolName: 'echo',
+      args: {},
+      source: AuditSource.workbench,
+      actor: 'user',
+    );
+    final event = container.read(auditLogProvider).first;
+    expect(event.source, AuditSource.workbench);
+    expect(event.actor, 'user');
+    expect(event.conversationId, isNull);
+  });
+
   test(
-    'tool errors and unknown servers are audited as errors, not thrown',
+    'tool errors are audited as errors and unknown servers do not throw',
     () async {
       final server = FakeMcpServer(
         tools: _tools,
@@ -161,6 +209,7 @@ void main() {
         actor: 'user',
       );
       expect(failed.isError, isTrue);
+      expect(failed.text, 'bad input');
 
       final missing = await hub.callTool(
         serverId: 'nope',
@@ -170,15 +219,37 @@ void main() {
         actor: 'user',
       );
       expect(missing.isError, isTrue);
-      expect(missing.text, contains('not connected'));
+      expect(missing.text, isNotEmpty);
 
-      final statuses = container
+      final calls = container
           .read(auditLogProvider)
-          .where((e) => e.kind == AuditKind.toolCall)
-          .map((e) => e.status);
-      expect(statuses, [AuditStatus.error, AuditStatus.error]);
+          .where((e) => e.kind == AuditKind.toolCall);
+      expect(calls.map((e) => e.status), [AuditStatus.error]);
     },
   );
+
+  test('a call the server cannot make says why instead of throwing', () async {
+    final container = await makeContainer(
+      httpClient: MockClient(
+        (_) async => throw http.ClientException('connection refused'),
+      ),
+    );
+    addTearDown(container.dispose);
+    final hub = container.read(mcpHubProvider.notifier);
+    final runtime = await hub.addServer(
+      name: 'Bad',
+      url: 'https://down.test/mcp',
+    );
+    final result = await hub.callTool(
+      serverId: runtime.config.id,
+      toolName: 'echo',
+      args: {},
+      source: AuditSource.workbench,
+      actor: 'user',
+    );
+    expect(result.isError, isTrue);
+    expect(result.text, contains('Could not reach'));
+  });
 
   test('disabling a server removes its tools from availableTools', () async {
     final container = await makeContainer(server: FakeMcpServer(tools: _tools));
@@ -198,23 +269,44 @@ void main() {
     );
   });
 
-  test('audit log is capped and newest first', () async {
-    final container = await makeContainer();
+  test('removing a server removes it from the server', () async {
+    final container = await makeContainer(server: FakeMcpServer(tools: _tools));
     addTearDown(container.dispose);
-    final log = container.read(auditLogProvider.notifier);
-    for (var i = 0; i < auditCapacity + 25; i++) {
-      log.record(
-        kind: AuditKind.toolCall,
-        status: AuditStatus.success,
-        source: AuditSource.workbench,
-        actor: 'user',
-        toolName: 't$i',
-      );
-    }
-    final events = container.read(auditLogProvider);
-    expect(events, hasLength(auditCapacity));
-    expect(events.first.toolName, 't${auditCapacity + 24}');
+    final hub = container.read(mcpHubProvider.notifier);
+    final runtime = await hub.addServer(
+      name: 'Demo',
+      url: 'https://mcp.test/mcp',
+    );
+    await hub.removeServer(runtime.config.id);
+    expect(container.read(mcpHubProvider).servers, isEmpty);
+    expect(gatewayOf(container).state.servers, isEmpty);
   });
+
+  test(
+    'the audit log shows the newest events first, up to its capacity',
+    () async {
+      final container = await makeContainer();
+      addTearDown(container.dispose);
+      final gateway = gatewayOf(container);
+      for (var i = 0; i < auditCapacity + 25; i++) {
+        await gateway.server.audit.record(
+          GatewayAuditEvent(
+            id: 'e$i',
+            timestamp: DateTime.utc(2026, 1, 1).add(Duration(seconds: i)),
+            source: 'dashboard',
+            principal: const {'kind': 'admin', 'id': 'admin', 'name': 'Admin'},
+            status: 'success',
+            tool: 't$i',
+          ),
+        );
+      }
+      final log = container.read(auditLogProvider.notifier);
+      await log.reload();
+      final events = container.read(auditLogProvider);
+      expect(events, hasLength(auditCapacity));
+      expect(events.first.toolName, 't${auditCapacity + 24}');
+    },
+  );
 
   test('AuditStats buckets by hour and computes latency', () {
     final now = DateTime(2026, 10, 17, 15, 30);
@@ -265,5 +357,3 @@ void main() {
     expect(stats.hourly.first.success, 1);
   });
 }
-
-String _json(Object o) => jsonEncode(o);

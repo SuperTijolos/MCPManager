@@ -35,7 +35,7 @@ void main() {
       name: 'Files',
       url: 'https://f.test/mcp',
     );
-    c.read(auditLogProvider.notifier).clear();
+    await c.read(auditLogProvider.notifier).clear();
 
     await hub.callTool(
       serverId: runtime.config.id,

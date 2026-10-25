@@ -51,6 +51,7 @@ abstract class AgentTool {
 
   Future<AgentToolResult> run(Json args, ToolRunContext context);
 
-  /// Called when a human refused this call, so it can be audited.
-  void onDenied(Json args, ToolRunContext context) {}
+  /// Called when a human refused this call, so it can be audited. The agent
+  /// waits for it, so the record exists before the model is told.
+  Future<void> onDenied(Json args, ToolRunContext context) async {}
 }

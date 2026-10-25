@@ -36,6 +36,7 @@ class ProviderConfig {
     required this.kind,
     required this.baseUrl,
     this.apiKey,
+    this.hasKey = false,
     this.models = const [],
     this.contextLength,
   });
@@ -46,7 +47,13 @@ class ProviderConfig {
 
   /// Ollama: `http://host:11434`. OpenAI-compatible: `https://host/v1`.
   final String baseUrl;
+
+  /// Only set while someone is typing a new key. A saved key never comes
+  /// back from the server, so it is only known through [hasKey].
   final String? apiKey;
+
+  /// The server holds a key for this provider.
+  final bool hasKey;
 
   /// Clean up existing saved keys as well as newly entered ones.
   String get bearerKey => normalizeApiKey(apiKey);
@@ -72,6 +79,7 @@ class ProviderConfig {
     String? baseUrl,
     String? apiKey,
     bool clearApiKey = false,
+    bool? hasKey,
     List<String>? models,
     int? contextLength,
     bool clearContextLength = false,
@@ -81,29 +89,32 @@ class ProviderConfig {
     kind: kind ?? this.kind,
     baseUrl: baseUrl ?? this.baseUrl,
     apiKey: clearApiKey ? null : apiKey ?? this.apiKey,
+    hasKey: clearApiKey ? false : hasKey ?? this.hasKey,
     models: models ?? this.models,
     contextLength: clearContextLength
         ? null
         : contextLength ?? this.contextLength,
   );
 
-  Json toJson() => {
-    'id': id,
+  /// What is sent to the server to create or change the provider.
+  Json toServerJson({bool clearKey = false}) => {
     'name': name,
     'kind': kind.name,
     'baseUrl': baseUrl,
-    if (apiKey != null) 'apiKey': apiKey,
     'models': models,
-    'contextLength': ?contextLength,
+    'contextLength': contextLength,
+    if (apiKey != null && apiKey!.isNotEmpty) 'apiKey': apiKey,
+    if (clearKey) 'clearApiKey': true,
   };
 
-  factory ProviderConfig.fromJson(Json json) => ProviderConfig(
+  /// A provider as the server describes it (the key is only `hasKey`).
+  factory ProviderConfig.fromServer(Json json) => ProviderConfig(
     id: json['id'] as String,
     name: json['name'] as String,
     kind: ProviderKind.values.byName(json['kind'] as String),
     baseUrl: json['baseUrl'] as String,
-    apiKey: json['apiKey'] as String?,
+    hasKey: json['hasKey'] as bool? ?? false,
     models: ((json['models'] as List?) ?? const []).cast<String>(),
-    contextLength: json['contextLength'] as int?,
+    contextLength: (json['contextLength'] as num?)?.toInt(),
   );
 }

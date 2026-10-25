@@ -383,7 +383,7 @@ void main() {
       await tester.tap(find.text('Add your first server'));
       await tester.pumpAndSettle();
 
-      expect(find.text('Redirect URI for this app'), findsNothing);
+      expect(find.text('Redirect URI for this gateway'), findsNothing);
       await tester.tap(find.text('Bearer token'));
       await tester.pumpAndSettle();
       expect(
@@ -395,20 +395,21 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.widgetWithText(TextFormField, 'Bearer token'), findsNothing);
-      expect(find.text('Redirect URI for this app'), findsOneWidget);
+      expect(find.text('Redirect URI for this gateway'), findsOneWidget);
       expect(find.text(oauthRedirect), findsOneWidget);
       expect(
         find.textContaining('chatgpt.com/connector/oauth/*'),
         findsOneWidget,
       );
       expect(
-        find.textContaining('allow CORS from https://app.test'),
-        findsOneWidget,
+        find.textContaining('CORS'),
+        findsNothing,
+        reason: 'the server signs in, so the upstream needs no CORS',
       );
       expect(
         find.textContaining('plain http'),
-        findsNothing,
-        reason: 'https origin',
+        findsOneWidget,
+        reason: 'the test server is a non-local http address',
       );
     },
   );
@@ -441,6 +442,8 @@ void main() {
     expect(find.text('Connected'), findsNothing);
 
     await tester.tap(find.text('Sign in'));
+    // The dashboard looks for the finished sign-in once a second.
+    await tester.pump(const Duration(seconds: 2));
     await tester.pumpAndSettle();
 
     expect(find.text('Connected'), findsOneWidget);
@@ -500,6 +503,7 @@ void main() {
       expect(find.text('Protected needs sign-in'), findsOneWidget);
 
       await tester.tap(find.text('Sign in'));
+      await tester.pump(const Duration(seconds: 2));
       await tester.pumpAndSettle();
       expect(find.text('Protected needs sign-in'), findsNothing);
       expect(world.mcpAuthHeaders.last, startsWith('Bearer '));

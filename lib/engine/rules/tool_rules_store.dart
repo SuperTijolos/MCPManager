@@ -1,11 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/ids.dart';
-import '../core/prefs.dart';
 import '../mcp/mcp_models.dart';
+import '../server/server_client.dart';
+import '../server/server_events.dart';
+import '../server/session.dart';
 import 'tool_rules.dart';
-
-const _storageKey = 'mcpm.toolrules.v1';
 
 class ToolRulesState {
   const ToolRulesState({this.rules = const [], this.overrides = const {}});
@@ -42,28 +44,78 @@ final toolRulesProvider = NotifierProvider<ToolRulesNotifier, ToolRulesState>(
   ToolRulesNotifier.new,
 );
 
+/// The rules and per-tool settings, kept on the server (portals and the chat
+/// use the same ones). Changes show at once and are sent in the background;
+/// other people's changes arrive over the event stream.
 class ToolRulesNotifier extends Notifier<ToolRulesState> {
+  ServerClient? _client;
+  Completer<void>? _loaded;
+  bool _dirty = false;
+  Future<void>? _pushing;
+
+  /// Completes when the first load has finished.
+  Future<void> get loaded => (_loaded ??= Completer<void>()).future;
+
+  /// Completes when everything changed so far has reached the server.
+  Future<void> get saved async {
+    while (_pushing != null) {
+      await _pushing;
+    }
+  }
+
   @override
   ToolRulesState build() {
-    final raw = readJson(ref.read(sharedPreferencesProvider), _storageKey);
-    if (raw is! Map) return const ToolRulesState();
-    final rules = <ToolRule>[];
-    for (final r in (raw['rules'] as List?) ?? const []) {
-      try {
-        rules.add(ToolRule.fromJson((r as Map).cast<String, dynamic>()));
-      } catch (_) {
-        // Skip rules written by an incompatible version.
+    _client = ref.watch(serverClientProvider);
+    _loaded = Completer<void>();
+    listenToServer(ref, (e) {
+      if (e.type == 'ready' ||
+          (e.type == 'changed' &&
+              ((e.data['collections'] as List?) ?? const []).any(
+                (c) => c == 'rules' || c == 'overrides',
+              ))) {
+        if (_pushing == null && !_dirty) unawaited(reload());
       }
+    });
+    if (_client != null) {
+      Future.microtask(() async {
+        await reload();
+        if (ref.mounted && !(_loaded?.isCompleted ?? true)) {
+          _loaded!.complete();
+        }
+      });
+    } else {
+      _loaded!.complete();
     }
-    final overrides = <String, ToolOverride>{};
-    for (final e in ((raw['overrides'] as Map?) ?? const {}).entries) {
-      try {
-        overrides['${e.key}'] = ToolOverride.fromJson(
-          (e.value as Map).cast<String, dynamic>(),
-        );
-      } catch (_) {}
+    return const ToolRulesState();
+  }
+
+  /// Loads the rules from the server.
+  Future<void> reload() async {
+    final client = _client;
+    if (client == null) return;
+    try {
+      final raw = await client.getMap('/api/rules');
+      if (!ref.mounted || _dirty || _pushing != null) return;
+      final rules = <ToolRule>[];
+      for (final r in (raw['rules'] as List?) ?? const []) {
+        try {
+          rules.add(ToolRule.fromJson((r as Map).cast<String, dynamic>()));
+        } catch (_) {
+          // Skip rules written by an incompatible version.
+        }
+      }
+      final overrides = <String, ToolOverride>{};
+      for (final e in ((raw['overrides'] as Map?) ?? const {}).entries) {
+        try {
+          overrides['${e.key}'] = ToolOverride.fromJson(
+            (e.value as Map).cast<String, dynamic>(),
+          );
+        } catch (_) {}
+      }
+      state = ToolRulesState(rules: rules, overrides: overrides);
+    } on ServerException {
+      // Keep what is shown.
     }
-    return ToolRulesState(rules: rules, overrides: overrides);
   }
 
   String newRuleId() => newId('rule');
@@ -164,11 +216,30 @@ class ToolRulesNotifier extends Notifier<ToolRulesState> {
 
   void _set(ToolRulesState next) {
     state = next;
-    writeJson(ref.read(sharedPreferencesProvider), _storageKey, {
-      'rules': [for (final r in next.rules) r.toJson()],
-      'overrides': {
-        for (final e in next.overrides.entries) e.key: e.value.toJson(),
-      },
+    _dirty = true;
+    // The cleanup runs after the assignment even if _push finishes at once.
+    _pushing ??= _push().whenComplete(() {
+      _pushing = null;
     });
+  }
+
+  /// Sends the latest state, again if it changed while sending.
+  Future<void> _push() async {
+    while (_dirty) {
+      _dirty = false;
+      final client = _client;
+      if (client == null || !ref.mounted) return;
+      final current = state;
+      try {
+        await client.putMap('/api/rules', {
+          'rules': [for (final r in current.rules) r.toJson()],
+          'overrides': {
+            for (final e in current.overrides.entries) e.key: e.value.toJson(),
+          },
+        });
+      } on ServerException {
+        // The change stays on screen; the next change sends everything again.
+      }
+    }
   }
 }

@@ -53,9 +53,7 @@ Future<ProviderContainer> _open(
     server: server,
     llm: llm,
     overrides: overrides,
-    prefs: {
-      'mcpm.audit.v1': jsonEncode([for (final e in events) e.toJson()]),
-    },
+    audit: events,
   );
   await goTo(tester, '/audit');
   return c;
@@ -304,7 +302,10 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('clear-confirm')));
       await tester.pumpAndSettle();
 
-      expect(c.read(auditLogProvider).map((e) => e.id), ['1', '2', '4']);
+      expect(
+        c.read(auditLogProvider).map((e) => e.id),
+        unorderedEquals(['1', '2', '4']),
+      );
       expect(find.textContaining('Cleared 1 event'), findsOneWidget);
     });
 
@@ -317,7 +318,10 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('clear-confirm')));
       await tester.pumpAndSettle();
-      expect(c.read(auditLogProvider).map((e) => e.id), ['1', '2', '3']);
+      expect(
+        c.read(auditLogProvider).map((e) => e.id),
+        unorderedEquals(['1', '2', '3']),
+      );
 
       await openClear(tester);
       await tester.tap(find.byKey(const ValueKey('clear-tools')));

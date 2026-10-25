@@ -1,10 +1,9 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mcp_manager/engine/agent/chat_controller.dart';
+import 'package:mcp_manager/engine/agent/chat_store.dart';
+import 'package:mcp_manager/engine/server/session.dart';
 import 'package:mcp_manager/engine/audit/audit_log.dart';
 import 'package:mcp_manager/engine/audit/audit_models.dart';
 import 'package:mcp_manager/engine/core/prefs.dart';
@@ -12,14 +11,11 @@ import 'package:mcp_manager/engine/llm/llm_settings.dart';
 import 'package:mcp_manager/engine/llm/llm_types.dart';
 import 'package:mcp_manager/engine/llm/provider_config.dart';
 import 'package:mcp_manager/engine/mcp/mcp_hub.dart';
-import 'package:mcp_manager/engine/rules/tool_rules_store.dart';
 import 'package:mcp_manager/engine/settings/app_settings.dart';
-import 'package:mcp_manager/engine/settings/backup.dart';
-
-import 'package:mcp_manager/router/pages/settings/data_section.dart';
 
 import '../support/app_harness.dart';
 import '../support/fakes.dart';
+import '../support/gateway_harness.dart';
 
 class _BrokenModels implements LlmProvider {
   @override
@@ -40,6 +36,7 @@ Future<ProviderContainer> _open(
   LlmProvider? llm,
   Size size = const Size(1400, 900),
   Map<String, Object> prefs = const {},
+  Future<void> Function(TestGateway gateway)? setup,
 }) async {
   final c = await pumpApp(
     tester,
@@ -47,6 +44,7 @@ Future<ProviderContainer> _open(
     server: FakeMcpServer(),
     size: size,
     prefs: prefs,
+    setup: setup,
   );
   await goTo(tester, '/settings');
   return c;
@@ -79,7 +77,7 @@ void main() {
         find.text('Providers and the model the Operator runs on'),
         findsOneWidget,
       );
-      for (final s in ['Models', 'Operator', 'Data & privacy']) {
+      for (final s in ['Models', 'Operator', 'Account & data']) {
         expect(find.text(s), findsWidgets);
       }
       await _section(tester, 'Operator');
@@ -87,13 +85,16 @@ void main() {
         find.text('Limits, approvals and your instructions'),
         findsOneWidget,
       );
-      await _section(tester, 'Data & privacy');
-      expect(find.text('Storage, backup and clean-up'), findsOneWidget);
+      await _section(tester, 'Account & data');
+      expect(
+        find.text('Who is signed in, where data lives, clean-up'),
+        findsOneWidget,
+      );
     });
 
     testWidgets('on a phone the sections are chips', (tester) async {
       await _open(tester, size: const Size(400, 800));
-      for (final label in ['Models', 'Operator', 'Data & privacy']) {
+      for (final label in ['Models', 'Operator', 'Account & data']) {
         expect(find.widgetWithText(ChoiceChip, label), findsOneWidget);
       }
       await tester.tap(find.widgetWithText(ChoiceChip, 'Operator'));
@@ -126,7 +127,7 @@ void main() {
     ) async {
       final c = await _open(tester);
       final p = c.read(llmSettingsProvider).providers.single;
-      c
+      await c
           .read(llmSettingsProvider.notifier)
           .upsert(p.copyWith(models: ['gemma4', 'missing-model']));
       await tester.pumpAndSettle();
@@ -175,7 +176,13 @@ void main() {
       final added = c.read(llmSettingsProvider).providers.last;
       expect(added.name, 'OpenRouter');
       expect(added.baseUrl, 'https://openrouter.ai/api/v1');
-      expect(added.apiKey, _openRouterSyntheticKey);
+      expect(added.apiKey, isNull, reason: 'the dashboard does not keep it');
+      expect(added.hasKey, isTrue);
+      expect(
+        gatewayOf(c).state.llmProviders.last.apiKey,
+        _openRouterSyntheticKey,
+        reason: 'the server holds it',
+      );
       expect(find.text('API key set'), findsOneWidget);
     });
 
@@ -197,26 +204,27 @@ void main() {
       expect(c.read(llmSettingsProvider).providers.length, 1);
     });
 
-    testWidgets('OpenRouter provider card flags truncated saved keys', (
+    testWidgets('the server refuses a truncated OpenRouter key and says why', (
       tester,
     ) async {
       final c = await _open(tester);
-      c
-          .read(llmSettingsProvider.notifier)
-          .upsert(
-            const ProviderConfig(
-              id: 'bad-openrouter',
-              name: 'OpenRouter',
-              kind: ProviderKind.openaiCompatible,
-              baseUrl: 'https://openrouter.ai/api/v1',
-              apiKey: 'sk-or-v1-truncated',
-            ),
-          );
+      await tester.tap(find.text('Add provider'));
       await tester.pumpAndSettle();
-      expect(find.text('invalid API key format'), findsOneWidget);
+      await tester.tap(find.text('OpenRouter'));
+      await tester.pumpAndSettle();
+      // Long enough for the form, short enough for the server to refuse.
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'API key'),
+        'sk-or-v1-${'0' * 20}',
+      );
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Invalid OpenRouter API key'), findsWidgets);
+      expect(c.read(llmSettingsProvider).providers.length, 1);
+      expect(gatewayOf(c).state.llmProviders.length, 1);
     });
 
-    testWidgets('hosted providers still require a key when edited', (
+    testWidgets('a stored key is kept unless replaced or removed', (
       tester,
     ) async {
       final c = await _open(tester);
@@ -230,19 +238,69 @@ void main() {
       );
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
-      final added = c.read(llmSettingsProvider).providers.last;
-      expect(added.apiKey, _openRouterSyntheticKey);
+      expect(
+        gatewayOf(c).state.llmProviders.last.apiKey,
+        _openRouterSyntheticKey,
+        reason: 'a pasted Bearer prefix is dropped',
+      );
 
+      // Editing without touching the key keeps it, and it is not asked for.
       await tester.tap(find.byTooltip('Edit').last);
       await tester.pumpAndSettle();
-      await tester.enterText(find.widgetWithText(TextFormField, 'API key'), '');
+      expect(
+        find.textContaining('A key is stored on the server'),
+        findsOneWidget,
+      );
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Name'),
+        'OR 2',
+      );
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      expect(gatewayOf(c).state.llmProviders.last.name, 'OR 2');
+      expect(
+        gatewayOf(c).state.llmProviders.last.apiKey,
+        _openRouterSyntheticKey,
+      );
+
+      // Removing it from a service that needs one is refused.
+      await tester.tap(find.byTooltip('Edit').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('remove-key')));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
       expect(find.text('This service needs a key'), findsOneWidget);
       expect(
-        c.read(llmSettingsProvider).providers.last.apiKey,
+        gatewayOf(c).state.llmProviders.last.apiKey,
         _openRouterSyntheticKey,
       );
+    });
+
+    testWidgets('a key can be removed from a service that does not need one', (
+      tester,
+    ) async {
+      final c = await _open(tester);
+      await c
+          .read(llmSettingsProvider.notifier)
+          .upsert(
+            const ProviderConfig(
+              id: 'lm',
+              name: 'LM Studio',
+              kind: ProviderKind.openaiCompatible,
+              baseUrl: 'http://localhost:1234/v1',
+              apiKey: 'lm-key-12345678',
+            ),
+          );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Edit').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('remove-key')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      expect(gatewayOf(c).state.llmProviders.last.apiKey, isNull);
+      expect(c.read(llmSettingsProvider).providers.last.hasKey, isFalse);
     });
 
     testWidgets('a local Ollama preset needs no key and brings gemma4', (
@@ -259,9 +317,11 @@ void main() {
       );
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
+      await tester.pumpAndSettle();
       final p = c.read(llmSettingsProvider).providers.last;
       expect(p.baseUrl, 'http://100.64.0.5:11434');
       expect(p.models, ['gemma4']);
+      expect(gatewayOf(c).state.llmProviders.last.baseUrl, p.baseUrl);
     });
 
     testWidgets('editing and removing a provider', (tester) async {
@@ -301,7 +361,12 @@ void main() {
       expect(find.text('2 enabled · 2 shown'), findsOneWidget);
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
+      await tester.pumpAndSettle();
       expect(c.read(llmSettingsProvider).providers.single.models, [
+        'gemma4',
+        'gemma4:e4b',
+      ]);
+      expect(gatewayOf(c).state.llmProviders.single.models, [
         'gemma4',
         'gemma4:e4b',
       ]);
@@ -382,23 +447,17 @@ void main() {
     });
   });
 
-  group('data & privacy', () {
+  group('account & data', () {
     Future<ProviderContainer> data(
       WidgetTester tester, {
       Size size = const Size(1400, 900),
+      Future<void> Function(TestGateway gateway)? setup,
     }) async {
-      final c = await _open(tester, size: size);
+      final c = await _open(tester, size: size, setup: setup);
       await c
           .read(mcpHubProvider.notifier)
-          .addServer(
-            name: 'Docs',
-            url: 'https://mcp.test/mcp',
-            headers: {
-              'Authorization': 'Bearer top-secret-token',
-              'X-Team': 'blue',
-            },
-          );
-      c
+          .addServer(name: 'Docs', url: 'https://mcp.test/mcp');
+      await c
           .read(auditLogProvider.notifier)
           .record(
             kind: AuditKind.toolCall,
@@ -406,195 +465,82 @@ void main() {
             source: AuditSource.workbench,
             actor: 'user',
           );
-      await _section(tester, 'Data & privacy');
+      await _section(tester, 'Account & data');
       return c;
     }
 
-    testWidgets('shows what is stored and how much of the budget it uses', (
+    testWidgets('says where the server is and who is signed in', (
       tester,
     ) async {
       await data(tester);
-      for (final label in [
-        'Servers',
-        'Audit log',
-        'Conversations',
-        'Tool rules',
-        'Providers & models',
-      ]) {
-        expect(
-          find.descendant(
-            of: find.byType(DataSection),
-            matching: find.text(label),
-          ),
-          findsOneWidget,
-          reason: label,
-        );
-      }
-      expect(find.text('1 configured'), findsOneWidget);
-      expect(find.byType(LinearProgressIndicator), findsOneWidget);
-      expect(find.textContaining('Total'), findsOneWidget);
+      expect(find.text('This dashboard'), findsOneWidget);
+      expect(find.text(gatewayUrl), findsOneWidget);
+      expect(find.text('The admin token'), findsOneWidget);
+      expect(find.textContaining('in its database'), findsOneWidget);
     });
 
-    testWidgets('export leaves credentials out until you ask', (tester) async {
-      await data(tester);
-      await _tapVisible(tester, find.text('Export…'));
-      expect(find.textContaining('top-secret-token'), findsNothing);
-      expect(find.textContaining('mcp-manager-backup'), findsOneWidget);
-
-      await tester.tap(find.text('Credentials'));
-      await tester.pumpAndSettle();
-      expect(find.textContaining('contain secrets'), findsOneWidget);
-      expect(find.textContaining('top-secret-token'), findsOneWidget);
-    });
-
-    testWidgets('export copies to the clipboard', (tester) async {
-      String? copied;
-      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-        SystemChannels.platform,
-        (call) async {
-          if (call.method == 'Clipboard.setData') {
-            copied = (call.arguments as Map)['text'] as String;
-          }
-          return null;
-        },
+    testWidgets('signing out forgets the session here and nothing else', (
+      tester,
+    ) async {
+      final c = await data(tester);
+      await _tapVisible(tester, find.text('Sign out'));
+      expect(
+        c.read(sessionProvider).status,
+        SessionStatus.signedOut,
+        reason: 'this browser lets go of the session',
       );
-      addTearDown(
-        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-          SystemChannels.platform,
-          null,
-        ),
+      expect(
+        c.read(sharedPreferencesProvider).getString('mcpm.session.v1'),
+        isNot(contains('token')),
       );
-      await data(tester);
-      await _tapVisible(tester, find.text('Export…'));
-      await tester.tap(find.text('Copy'));
-      await tester.pumpAndSettle();
-      expect(copied, isNotNull);
-      final json = jsonDecode(copied!) as Map;
-      expect(json['format'], backupFormat);
-      expect(copied, isNot(contains('top-secret-token')));
+      expect(gatewayOf(c).state.servers, hasLength(1));
     });
 
     testWidgets(
-      'import validates, summarises, then restores and reloads the app',
+      'clearing the audit log asks first and clears it on the server',
       (tester) async {
         final c = await data(tester);
-        await _tapVisible(tester, find.text('Import…'));
+        expect(c.read(auditLogProvider), isNotEmpty);
+        await _tapVisible(tester, find.widgetWithText(OutlinedButton, 'Clear'));
+        await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+        await tester.pumpAndSettle();
+        expect(c.read(auditLogProvider), isNotEmpty);
 
-        await tester.enterText(find.byType(TextField).last, 'not json');
+        await tester.tap(find.widgetWithText(OutlinedButton, 'Clear'));
         await tester.pumpAndSettle();
-        await tester.tap(find.text('Check'));
+        await tester.tap(find.widgetWithText(FilledButton, 'Clear'));
         await tester.pumpAndSettle();
-        expect(find.text('That is not valid JSON.'), findsOneWidget);
-
-        final backup = jsonEncode({
-          'format': backupFormat,
-          'version': 1,
-          'servers': [
-            {
-              'id': 'srv_x',
-              'name': 'Imported',
-              'url': 'https://imported.test/mcp',
-              'headers': {},
-              'enabled': true,
-            },
-          ],
-          'settings': {
-            'maxSteps': 5,
-            'extraInstructions': 'from backup',
-            'confirmReadOnly': false,
-          },
-        });
-        await tester.enterText(find.byType(TextField).last, backup);
-        await tester.pumpAndSettle();
-        await tester.tap(find.text('Check'));
-        await tester.pumpAndSettle();
-        expect(find.text('This will replace:'), findsOneWidget);
-        expect(find.text('• servers (1)'), findsOneWidget);
-        expect(find.text('• operator settings'), findsOneWidget);
-        expect(find.textContaining('no credentials'), findsOneWidget);
-
-        await tester.tap(find.text('Import'));
-        await tester.pumpAndSettle();
-        expect(find.textContaining('Restored: servers (1)'), findsOneWidget);
-        expect(c.read(mcpHubProvider).servers.map((s) => s.config.name), [
-          'Imported',
-        ]);
-        expect(c.read(appSettingsProvider).maxSteps, 5);
+        expect(c.read(auditLogProvider), isEmpty);
+        expect(await gatewayOf(c).server.audit.recent(), isEmpty);
       },
     );
 
-    testWidgets('import refuses something that is not a backup', (
+    testWidgets('deleting all conversations removes them from the server', (
       tester,
     ) async {
-      await data(tester);
-      await _tapVisible(tester, find.text('Import…'));
-      await tester.enterText(find.byType(TextField).last, '{"hello":"world"}');
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Check'));
-      await tester.pumpAndSettle();
-      expect(find.text('That is not an MCP Manager backup.'), findsOneWidget);
-      expect(find.text('Import'), findsNothing);
-    });
-
-    testWidgets('clearing the audit log asks first', (tester) async {
-      final c = await data(tester);
-      expect(c.read(auditLogProvider), isNotEmpty);
-      await _tapVisible(tester, find.widgetWithText(OutlinedButton, 'Clear'));
-      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
-      await tester.pumpAndSettle();
-      expect(c.read(auditLogProvider), isNotEmpty);
-
-      await tester.tap(find.widgetWithText(OutlinedButton, 'Clear'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(FilledButton, 'Clear'));
-      await tester.pumpAndSettle();
-      expect(c.read(auditLogProvider), isEmpty);
-    });
-
-    testWidgets('reset needs RESET typed, then wipes this app\'s data only', (
-      tester,
-    ) async {
-      final c = await data(tester);
-      await c
-          .read(sharedPreferencesProvider)
-          .setString('someone.else', 'keep me');
-      await _tapVisible(tester, find.text('Reset…'));
-
-      final reset = find.widgetWithText(FilledButton, 'Reset');
-      expect(tester.widget<FilledButton>(reset).onPressed, isNull);
-      await tester.enterText(
-        find.widgetWithText(TextField, 'Type RESET to confirm'),
-        'reset',
+      final c = await data(
+        tester,
+        setup: (gateway) => gateway.server.chats.save(
+          'chat_old',
+          'admin',
+          DateTime.now(),
+          title: 'Old',
+        ),
       );
+      expect(c.read(chatControllerProvider).conversations, hasLength(1));
+      await _tapVisible(tester, find.widgetWithText(OutlinedButton, 'Delete'));
+      await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
       await tester.pumpAndSettle();
-      expect(
-        tester.widget<FilledButton>(reset).onPressed,
-        isNull,
-        reason: 'it is case-sensitive',
-      );
-      await tester.enterText(
-        find.widgetWithText(TextField, 'Type RESET to confirm'),
-        'RESET',
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(reset);
-      await tester.pumpAndSettle();
-
-      expect(c.read(mcpHubProvider).servers, isEmpty);
-      expect(c.read(auditLogProvider), isEmpty);
-      expect(c.read(toolRulesProvider).rules, isEmpty);
-      expect(
-        c.read(sharedPreferencesProvider).getString('someone.else'),
-        'keep me',
-      );
-      expect(find.text('Everything was reset'), findsOneWidget);
+      await c.read(chatStoreProvider).flushed;
+      expect(await gatewayOf(c).server.chats.list('admin'), isEmpty);
     });
   });
 
   group('phone width', () {
     testWidgets('every section fits', (tester) async {
       await _open(tester, size: const Size(400, 800));
-      for (final label in ['Models', 'Operator', 'Data & privacy']) {
+      for (final label in ['Models', 'Operator', 'Account & data']) {
+        await tester.ensureVisible(find.widgetWithText(ChoiceChip, label));
         await tester.tap(find.widgetWithText(ChoiceChip, label));
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull, reason: label);

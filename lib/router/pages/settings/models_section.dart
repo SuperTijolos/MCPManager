@@ -128,11 +128,6 @@ class _ProviderCardState extends ConsumerState<ProviderCard> {
   @override
   Widget build(BuildContext context) {
     final p = widget.provider;
-    final keyFormatError =
-        p.kind == ProviderKind.openaiCompatible &&
-            Uri.tryParse(p.baseUrl)?.host.toLowerCase() == 'openrouter.ai'
-        ? openRouterKeyProblem(p.apiKey)
-        : null;
     final theme = Theme.of(context);
     final store = ref.read(llmSettingsProvider.notifier);
     final muted = theme.textTheme.bodySmall?.copyWith(
@@ -175,14 +170,8 @@ class _ProviderCardState extends ConsumerState<ProviderCard> {
               runSpacing: 6,
               children: [
                 StatusChip(
-                  p.bearerKey.isEmpty
-                      ? 'no API key'
-                      : keyFormatError != null
-                      ? 'invalid API key format'
-                      : 'API key set',
-                  keyFormatError != null
-                      ? StatusColors.bad
-                      : StatusColors.muted,
+                  p.hasKey ? 'API key set' : 'no API key',
+                  StatusColors.muted,
                   icon: Icons.vpn_key_outlined,
                 ),
                 if (p.kind == ProviderKind.ollama)

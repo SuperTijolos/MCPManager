@@ -168,7 +168,7 @@ void main() {
 
     final id = c.read(chatControllerProvider).activeId!;
     c.read(chatControllerProvider.notifier).newConversation();
-    c.read(chatControllerProvider.notifier).open(id);
+    await c.read(chatControllerProvider.notifier).open(id);
 
     expect(_notices(c), isNotEmpty);
   });

@@ -1,60 +1,58 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mcp_manager/ui/widgets.dart';
+import 'package:mcp_portal_server/mcp_portal_server.dart' show ChatContent;
 
 import '../support/app_harness.dart';
+import '../support/gateway_harness.dart';
 
-Map<String, Object> _savedConversation({
+const _id = 'operator-test';
+
+/// This browser was last looking at that conversation.
+const _active = {'mcpm.chats.active.v1': _id};
+
+/// A saved conversation on the server, with one tool call in it.
+Future<void> Function(TestGateway) _saved({
   String status = 'done',
   String? result = '{"count": 2, "ok": true}',
   bool assistantReply = false,
-}) {
-  const id = 'operator-test';
-  return {
-    'mcpm.chats.active.v1': id,
-    'mcpm.chats.index.v1': jsonEncode([
-      {
-        'id': id,
-        'title': 'Inspect MCP tools',
-        'createdAt': '2026-10-18T11:00:00.000',
-        'updatedAt': '2026-10-18T11:10:00.000',
-        'messageCount': 1,
-      },
-    ]),
-    'mcpm.chat.$id.v1': jsonEncode({
-      'items': [
-        {'type': 'user', 'id': 'request', 'text': 'List the tools'},
-        {
-          'type': 'tool',
-          'id': 'call-1',
-          'callId': 'call-id-1',
-          'name': 'mcp_list_tools',
-          'label': 'MCP Manager · mcp_list_tools',
-          'args': {'server': 'MCP GuikiPT - Cloudflare'},
-          'status': status,
-          'output': result,
-        },
-        if (assistantReply)
+}) =>
+    (gateway) => gateway.server.chats.save(
+      _id,
+      'admin',
+      DateTime.now(),
+      title: 'Inspect MCP tools',
+      content: ChatContent(
+        items: [
+          {'type': 'user', 'id': 'request', 'text': 'List the tools'},
           {
-            'type': 'assistant',
-            'id': 'assistant-1',
-            'text': 'Found two MCP tools.',
-            'thinking': 'I should inspect the available MCP tools.',
+            'type': 'tool',
+            'id': 'call-1',
+            'callId': 'call-id-1',
+            'name': 'mcp_list_tools',
+            'label': 'MCP Manager · mcp_list_tools',
+            'args': {'server': 'MCP GuikiPT - Cloudflare'},
+            'status': status,
+            'output': result,
           },
-      ],
-      'history': [],
-    }),
-  };
-}
+          if (assistantReply)
+            {
+              'type': 'assistant',
+              'id': 'assistant-1',
+              'text': 'Found two MCP tools.',
+              'thinking': 'I should inspect the available MCP tools.',
+            },
+        ],
+        history: const [],
+      ),
+    );
 
 void main() {
   testWidgets(
     'arguments and results collapse separately, with meaningful summaries',
     (tester) async {
-      await pumpApp(tester, prefs: _savedConversation());
+      await pumpApp(tester, prefs: _active, setup: _saved());
       await goTo(tester, '/chat');
       expect(find.text('Arguments'), findsOneWidget);
       expect(find.text('1 field'), findsOneWidget);
@@ -83,7 +81,7 @@ void main() {
   testWidgets('Operator can hide and restore thinking without hiding answers', (
     tester,
   ) async {
-    await pumpApp(tester, prefs: _savedConversation(assistantReply: true));
+    await pumpApp(tester, prefs: _active, setup: _saved(assistantReply: true));
     await goTo(tester, '/chat');
     expect(find.text('Thinking'), findsOneWidget);
     expect(find.text('Found two MCP tools.'), findsOneWidget);
@@ -114,7 +112,7 @@ void main() {
         null,
       ),
     );
-    await pumpApp(tester, prefs: _savedConversation(assistantReply: true));
+    await pumpApp(tester, prefs: _active, setup: _saved(assistantReply: true));
     await goTo(tester, '/chat');
     await tester.tap(find.byTooltip('Copy response'));
     await tester.pump();
@@ -128,10 +126,8 @@ void main() {
     await pumpApp(
       tester,
       size: const Size(420, 850),
-      prefs: _savedConversation(
-        status: 'error',
-        result: 'Network disconnected',
-      ),
+      prefs: _active,
+      setup: _saved(status: 'error', result: 'Network disconnected'),
     );
     await goTo(tester, '/chat');
     expect(find.text('Failed'), findsOneWidget);

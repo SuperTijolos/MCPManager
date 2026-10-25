@@ -422,18 +422,11 @@ void main() {
       store.remove('Second');
       expect(c.read(toolRulesProvider).rules.single.enabled, isFalse);
 
-      final stored = c.read(toolRulesProvider);
-      final c2 = await makeContainer(
-        prefs: {
-          'mcpm.toolrules.v1': jsonEncode({
-            'rules': [for (final r in stored.rules) r.toJson()],
-            'overrides': {
-              for (final e in stored.overrides.entries) e.key: e.value.toJson(),
-            },
-          }),
-        },
-      );
+      // The rules live on the server: a new session on it finds them.
+      await store.saved;
+      final c2 = await makeContainer(gateway: gatewayOf(c));
       addTearDown(c2.dispose);
+      await c2.read(toolRulesProvider.notifier).loaded;
       final restored = c2.read(toolRulesProvider);
       expect(restored.rules.single.toolKeys, ['s1/a', 's1/b']);
       expect(restored.rules.single.args.single.name, 'reason');
@@ -497,7 +490,7 @@ void main() {
       for (final e in overrides.entries) {
         store.setOverride('$id/${e.key}', e.value);
       }
-      c.read(auditLogProvider.notifier).clear();
+      await c.read(auditLogProvider.notifier).clear();
       server.bodies.clear();
       return (c, llm, server);
     }

@@ -1,12 +1,9 @@
-import 'dart:convert';
-
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mcp_manager/engine/agent/chat_controller.dart';
 import 'package:mcp_manager/engine/audit/audit_export.dart';
 import 'package:mcp_manager/engine/audit/audit_log.dart';
 import 'package:mcp_manager/engine/audit/audit_models.dart';
-import 'package:mcp_manager/engine/core/prefs.dart';
 import 'package:mcp_manager/engine/llm/llm_types.dart';
 import 'package:mcp_manager/engine/mcp/mcp_hub.dart';
 
@@ -79,30 +76,32 @@ void main() {
 
   group('AuditLog', () {
     test(
-      'removeWhere deletes matches, persists, and reports the count',
+      'removeWhere deletes matches on the server and reports the count',
       () async {
         final c = await makeContainer();
         addTearDown(c.dispose);
         final log = c.read(auditLogProvider.notifier);
         for (var i = 0; i < 5; i++) {
-          log.record(
-            kind: i.isEven ? AuditKind.toolCall : AuditKind.serverConnect,
+          await log.record(
+            kind: i.isEven ? AuditKind.toolCall : AuditKind.manage,
             status: AuditStatus.success,
-            source: AuditSource.system,
-            actor: 'system',
+            source: AuditSource.operator,
+            actor: 'operator:gemma4',
             toolName: 't$i',
           );
         }
+        expect(c.read(auditLogProvider), hasLength(5));
 
-        final removed = log.removeWhere((e) => e.kind == AuditKind.toolCall);
+        final removed = await log.removeWhere(
+          (e) => e.kind == AuditKind.toolCall,
+        );
 
         expect(removed, 3);
         expect(c.read(auditLogProvider), hasLength(2));
-        expect(log.removeWhere((e) => false), 0);
-        final stored = c
-            .read(sharedPreferencesProvider)
-            .getString('mcpm.audit.v1')!;
-        expect(jsonDecode(stored) as List, hasLength(2));
+        expect(await log.removeWhere((e) => false), 0);
+        // Gone from the server too, not just from the screen.
+        await log.reload();
+        expect(c.read(auditLogProvider), hasLength(2));
       },
     );
 
@@ -159,7 +158,7 @@ void main() {
       await c
           .read(mcpHubProvider.notifier)
           .addServer(name: 'Demo', url: 'https://mcp.test/mcp');
-      c.read(auditLogProvider.notifier).clear();
+      await c.read(auditLogProvider.notifier).clear();
 
       await c.read(chatControllerProvider.notifier).send('look it up');
 
@@ -191,7 +190,7 @@ void main() {
       name: 'Demo',
       url: 'https://mcp.test/mcp',
     );
-    c.read(auditLogProvider.notifier).clear();
+    await c.read(auditLogProvider.notifier).clear();
 
     await hub.callTool(
       serverId: runtime.config.id,

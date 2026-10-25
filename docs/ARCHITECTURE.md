@@ -60,5 +60,5 @@ instance is the writer.
 1. **Done** — Postgres data layer: migrations, write-through state, audit table, tests against a real Postgres.
 2. **Done** — GitHub login, sessions, `members`, OAuth consent through login.
 3. **Done** — Server API for the dashboard: tool catalogue and calls (audited by source), upstream OAuth held server-side, health monitor, chats, LLM providers with a streaming proxy, and the event stream.
-4. Dashboard rewrite onto that API.
-5. Remove the local-only engine code from the app.
+4. **Done** — Dashboard rewrite onto that API: sign-in, server-backed hub, audit, rules, chats, providers (through the proxy), live updates.
+5. **Done** — Local-only engine code removed (local OAuth flow, stores, backup/restore).

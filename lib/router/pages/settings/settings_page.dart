@@ -17,7 +17,11 @@ enum _Section {
     Icons.smart_toy_outlined,
     'Limits, approvals and your instructions',
   ),
-  data('Data & privacy', Icons.shield_outlined, 'Storage, backup and clean-up');
+  data(
+    'Account & data',
+    Icons.shield_outlined,
+    'Who is signed in, where data lives, clean-up',
+  );
 
   const _Section(this.label, this.icon, this.subtitle);
   final String label;

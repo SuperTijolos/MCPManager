@@ -31,8 +31,8 @@ class PortalsTab extends ConsumerWidget {
         icon: Icons.hub_outlined,
         title: 'No portals yet',
         message: data.servers.isEmpty
-            ? 'First put some of your servers on the gateway (Servers tab), '
-                  'then group them into a portal.'
+            ? 'Add some MCP servers first (the MCP Servers page), then group '
+                  'them into a portal.'
             : 'A portal publishes a set of servers as one MCP endpoint for '
                   'Claude, ChatGPT or any MCP client.',
         action: FilledButton.icon(
@@ -218,7 +218,7 @@ class _PortalCard extends ConsumerWidget {
         title: Text('Delete ${portal.name}?'),
         content: const Text(
           'Clients using this portal\'s address stop working. The servers '
-          'behind it stay on the gateway.',
+          'behind it stay as they are.',
         ),
         actions: [
           TextButton(
@@ -391,7 +391,7 @@ class _PortalDialogState extends ConsumerState<PortalDialog> {
   Widget build(BuildContext context) {
     final data = ref.watch(portalControllerProvider);
     final theme = Theme.of(context);
-    final base = data.status?.baseUrl ?? data.settings.url;
+    final base = data.status?.baseUrl ?? data.serverUrl;
     return AlertDialog(
       title: Text(_editing ? 'Edit portal' : 'New portal'),
       content: SizedBox(
@@ -436,8 +436,7 @@ class _PortalDialogState extends ConsumerState<PortalDialog> {
               const SizedBox(height: 4),
               if (data.servers.isEmpty)
                 Text(
-                  'No servers on the gateway yet. Put some there from the '
-                  'Servers tab first.',
+                  'No servers yet. Add some on the MCP Servers page first.',
                   style: theme.textTheme.bodySmall,
                 )
               else
@@ -524,8 +523,8 @@ class _ConnectClientDialog extends StatelessWidget {
               const SizedBox(height: 4),
               Text(
                 'Add a custom connector with the address above. When it asks '
-                'you to sign in, enter the gateway\'s admin token on the page '
-                'that opens. Nothing else to copy.',
+                'you to sign in, sign in with GitHub on the page that opens '
+                '(or enter the admin token). Nothing else to copy.',
                 style: muted,
               ),
               const SizedBox(height: 18),

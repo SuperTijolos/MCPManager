@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mcp_manager/engine/agent/chat_controller.dart';
@@ -8,26 +6,33 @@ import 'package:mcp_manager/engine/core/prefs.dart';
 import 'package:mcp_manager/engine/llm/llm_types.dart';
 
 import '../support/fakes.dart';
+import '../support/gateway_harness.dart';
 
 ScriptedLlm _llm([int answers = 6]) => ScriptedLlm([
   for (var i = 0; i < answers; i++)
     [LlmTextDelta('answer ${i + 1}'), const LlmDone()],
 ]);
 
+/// [gateway] shares one server between containers: a restart of the
+/// dashboard against the same server.
 Future<ProviderContainer> _container(
   ScriptedLlm llm, {
+  TestGateway? gateway,
   Map<String, Object> prefs = const {},
 }) async {
-  final c = await makeContainer(llm: llm, prefs: prefs);
+  final c = await makeContainer(llm: llm, gateway: gateway, prefs: prefs);
   addTearDown(c.dispose);
+  await c.read(chatControllerProvider.notifier).loaded;
   return c;
 }
 
-Map<String, Object> _carry(ProviderContainer c) {
+/// What a restart would find: everything saved has reached the server.
+Future<Map<String, Object>> _carry(ProviderContainer c) async {
+  await c.read(chatStoreProvider).flushed;
   final sp = c.read(sharedPreferencesProvider);
   return {
     for (final k in sp.getKeys())
-      if (k.startsWith('mcpm.chat')) k: sp.get(k)!,
+      if (k.startsWith('mcpm.chats.')) k: sp.get(k)!,
   };
 }
 
@@ -85,7 +90,7 @@ void main() {
           .map((m) => m.content);
       expect(seen, ['second topic']);
 
-      chat.open(firstId);
+      await chat.open(firstId);
       expect(
         c.read(chatControllerProvider).items.whereType<UserItem>().single.text,
         'first topic',
@@ -115,7 +120,7 @@ void main() {
         'one',
       ]);
 
-      chat.open(oneId);
+      await chat.open(oneId);
       await chat.send('one again');
       expect(
         c.read(chatControllerProvider).conversations.map((m) => m.title).first,
@@ -180,26 +185,26 @@ void main() {
     await chat.send('a');
     chat.newConversation();
     await chat.send('b');
-    chat.deleteAll();
+    await chat.deleteAll();
     expect(c.read(chatControllerProvider).conversations, isEmpty);
     expect(c.read(chatControllerProvider).items, isEmpty);
-    final sp = c.read(sharedPreferencesProvider);
-    expect(
-      sp.getKeys().where(
-        (k) => RegExp(r'^mcpm\.chat\.chat_.*\.v1$').hasMatch(k),
-      ),
-      isEmpty,
-    );
+    final saved = await gatewayOf(c).server.chats.list('admin');
+    expect(saved, isEmpty, reason: 'gone from the server, not just the screen');
   });
 
   test('the history and the open conversation survive a restart', () async {
-    final first = await _container(_llm());
+    final gateway = await TestGateway.start();
+    final first = await _container(_llm(), gateway: gateway);
     final chat = first.read(chatControllerProvider.notifier);
     await chat.send('alpha');
     chat.newConversation();
     await chat.send('beta');
 
-    final second = await _container(_llm(), prefs: _carry(first));
+    final second = await _container(
+      _llm(),
+      gateway: gateway,
+      prefs: await _carry(first),
+    );
     final state = second.read(chatControllerProvider);
     expect(state.conversations.map((m) => m.title), ['beta', 'alpha']);
     expect(
@@ -210,12 +215,17 @@ void main() {
   });
 
   test('starting a new conversation survives a restart too (you come back to an empty chat)', () async {
-    final first = await _container(_llm());
+    final gateway = await TestGateway.start();
+    final first = await _container(_llm(), gateway: gateway);
     final chat = first.read(chatControllerProvider.notifier);
     await chat.send('alpha');
     chat.newConversation();
 
-    final second = await _container(_llm(), prefs: _carry(first));
+    final second = await _container(
+      _llm(),
+      gateway: gateway,
+      prefs: await _carry(first),
+    );
     expect(second.read(chatControllerProvider).items, isEmpty);
     expect(second.read(chatControllerProvider).conversations, hasLength(1));
   });
@@ -267,55 +277,47 @@ void main() {
     );
   });
 
-  test(
-    'the single conversation of the first version is migrated into the list',
-    () async {
-      final legacy = jsonEncode({
-        'items': [
-          {'type': 'user', 'id': 'u1', 'text': 'my old question'},
-          {
-            'type': 'assistant',
-            'id': 'a1',
-            'text': 'my old answer',
-            'thinking': '',
-          },
-        ],
-        'history': [
-          {'role': 'user', 'content': 'my old question'},
-          {'role': 'assistant', 'content': 'my old answer'},
-        ],
-      });
-      final c = await _container(_llm(), prefs: {'mcpm.chat.v1': legacy});
-      final state = c.read(chatControllerProvider);
-      expect(state.conversations.single.title, 'my old question');
-      expect(
-        c.read(sharedPreferencesProvider).getString('mcpm.chat.v1'),
-        isNull,
-        reason: 'migrated once',
-      );
+  test('a conversation whose body is missing does not crash', () async {
+    final gateway = await TestGateway.start();
+    await gateway.server.chats.save(
+      'orphan',
+      'admin',
+      DateTime.now(),
+      title: 'Orphan',
+    );
+    final c = await _container(_llm(), gateway: gateway);
+    final state = c.read(chatControllerProvider);
+    expect(state.conversations.single.title, 'Orphan');
+    expect(state.items, isEmpty);
 
+    await c.read(chatControllerProvider.notifier).open('orphan');
+    expect(c.read(chatControllerProvider).items, isEmpty);
+    expect(c.read(chatControllerProvider).activeId, 'orphan');
+  });
+
+  test('conversations are private to the person who made them', () async {
+    final gateway = await TestGateway.start();
+    await gateway.server.chats.save(
+      'theirs',
+      'github:7',
+      DateTime.now(),
+      title: 'Someone else',
+    );
+    final c = await _container(_llm(), gateway: gateway);
+    expect(c.read(chatControllerProvider).conversations, isEmpty);
+  });
+
+  test(
+    'the number of kept conversations on the server follows the app',
+    () async {
+      final c = await _container(_llm(3));
       final chat = c.read(chatControllerProvider.notifier);
-      chat.open(state.conversations.single.id);
-      expect(
-        c
-            .read(chatControllerProvider)
-            .items
-            .whereType<AssistantItem>()
-            .single
-            .text,
-        'my old answer',
-      );
+      await chat.send('one');
+      chat.newConversation();
+      await chat.send('two');
+      await c.read(chatStoreProvider).flushed;
+      final saved = await gatewayOf(c).server.chats.list('admin');
+      expect([for (final m in saved) m.title], ['two', 'one']);
     },
   );
-
-  test('a missing or corrupt conversation body does not crash', () async {
-    final first = await _container(_llm());
-    await first.read(chatControllerProvider.notifier).send('x');
-    final id = first.read(chatControllerProvider).activeId!;
-    final prefs = _carry(first)..['mcpm.chat.$id.v1'] = '{not json';
-
-    final second = await _container(_llm(), prefs: prefs);
-    expect(second.read(chatControllerProvider).items, isEmpty);
-    expect(second.read(chatControllerProvider).conversations, hasLength(1));
-  });
 }

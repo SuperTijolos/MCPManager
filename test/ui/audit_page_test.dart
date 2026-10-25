@@ -5,6 +5,7 @@ import 'package:mcp_manager/engine/audit/audit_models.dart';
 import 'package:mcp_manager/ui/pagination.dart';
 
 import '../support/app_harness.dart';
+import '../support/fakes.dart';
 
 void main() {
   group('PageRange', () {
@@ -158,20 +159,23 @@ void main() {
       'a reshaped call shows what the model sent, what was forwarded and the audit-only reason',
       (tester) async {
         final c = await pumpApp(tester);
-        c
-            .read(auditLogProvider.notifier)
-            .record(
-              kind: AuditKind.toolCall,
-              status: AuditStatus.success,
-              source: AuditSource.operator,
-              actor: 'operator:gemma4',
-              serverName: 'Docs',
-              toolName: 'lookup',
-              args: '{"q":"x","reason":"user asked"}',
-              forwarded: '{"q":"x"}',
-              context: '{"reason":"user asked"}',
-              result: 'found x',
-            );
+        await seedAudit(gatewayOf(c), [
+          AuditEvent(
+            id: 'reshaped',
+            timestamp: DateTime.now(),
+            kind: AuditKind.toolCall,
+            status: AuditStatus.success,
+            source: AuditSource.operator,
+            actor: 'operator:gemma4',
+            serverName: 'Docs',
+            toolName: 'lookup',
+            args: '{"q":"x","reason":"user asked"}',
+            forwarded: '{"q":"x"}',
+            context: '{"reason":"user asked"}',
+            result: 'found x',
+          ),
+        ]);
+        await c.read(auditLogProvider.notifier).reload();
         await goTo(tester, '/audit');
 
         expect(

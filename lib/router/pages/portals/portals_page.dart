@@ -5,60 +5,25 @@ import '../../../engine/portal/portal_controller.dart';
 import '../../../ui/theme.dart';
 import '../../../ui/widgets.dart';
 import 'access_tab.dart';
-import 'activity_tab.dart';
-import 'connect_card.dart';
 import 'portals_tab.dart';
-import 'servers_tab.dart';
 
 /// Portals: publish chosen servers as authenticated MCP endpoints through the
-/// gateway server.
-class PortalsPage extends ConsumerStatefulWidget {
+/// server, and manage who may use them.
+class PortalsPage extends ConsumerWidget {
   const PortalsPage({super.key});
 
   @override
-  ConsumerState<PortalsPage> createState() => _PortalsPageState();
-}
-
-class _PortalsPageState extends ConsumerState<PortalsPage> {
-  bool _editConnection = false;
-
-  @override
-  void initState() {
-    super.initState();
-    // Read the gateway when the page opens, if one is saved.
-    Future.microtask(() {
-      if (!mounted) return;
-      final data = ref.read(portalControllerProvider);
-      if (data.settings.configured &&
-          data.connection == PortalConnection.connecting) {
-        ref.read(portalControllerProvider.notifier).refresh();
-      }
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final data = ref.watch(portalControllerProvider);
     final controller = ref.read(portalControllerProvider.notifier);
-    final configured = data.settings.configured;
 
     Widget body;
-    if (!configured || _editConnection) {
-      body = GatewayConnectCard(
-        initialUrl: data.settings.url,
-        error: data.error,
-      );
-    } else if (data.connection == PortalConnection.connecting &&
-        !data.connected &&
+    if (data.connection == PortalConnection.connecting &&
         data.refreshedAt == null) {
       body = const Center(child: CircularProgressIndicator());
-    } else if (data.connection == PortalConnection.failed &&
+    } else if (data.connection != PortalConnection.connected &&
         data.refreshedAt == null) {
-      body = _Unreachable(
-        error: data.error,
-        onRetry: controller.refresh,
-        onEdit: () => setState(() => _editConnection = true),
-      );
+      body = _Unreachable(error: data.error, onRetry: controller.refresh);
     } else {
       body = Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -66,7 +31,7 @@ class _PortalsPageState extends ConsumerState<PortalsPage> {
           if (data.connection == PortalConnection.failed)
             _Banner(
               message:
-                  '${data.error ?? 'The gateway did not answer.'} Showing what was loaded before.',
+                  '${data.error ?? 'The server did not answer.'} Showing what was loaded before.',
             ),
           const Expanded(child: _Tabs()),
         ],
@@ -75,76 +40,26 @@ class _PortalsPageState extends ConsumerState<PortalsPage> {
 
     return PageScaffold(
       title: 'Portals',
-      subtitle: configured
-          ? 'Gateway ${data.settings.url}${data.status == null ? '' : ' · v${data.status!.version}'}'
-          : 'Publish your servers as MCP endpoints for Claude, ChatGPT and other clients',
+      subtitle:
+          'Server ${data.serverUrl}${data.status == null ? '' : ' · v${data.status!.version}'}',
       actions: [
-        if (configured && !_editConnection) ...[
-          IconButton(
-            key: const ValueKey('portals-refresh'),
-            tooltip: 'Refresh from the gateway',
-            icon: data.connection == PortalConnection.connecting
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.refresh),
-            onPressed: data.connection == PortalConnection.connecting
-                ? null
-                : controller.refresh,
-          ),
-          PopupMenuButton<String>(
-            key: const ValueKey('portals-menu'),
-            tooltip: 'Gateway connection',
-            onSelected: (v) {
-              if (v == 'edit') setState(() => _editConnection = true);
-              if (v == 'disconnect') _confirmDisconnect();
-            },
-            itemBuilder: (context) => const [
-              PopupMenuItem(
-                value: 'edit',
-                child: Text('Change address or token'),
-              ),
-              PopupMenuItem(value: 'disconnect', child: Text('Disconnect')),
-            ],
-          ),
-        ] else if (configured)
-          TextButton(
-            onPressed: () => setState(() => _editConnection = false),
-            child: const Text('Back'),
-          ),
+        IconButton(
+          key: const ValueKey('portals-refresh'),
+          tooltip: 'Refresh from the server',
+          icon: data.connection == PortalConnection.connecting
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.refresh),
+          onPressed: data.connection == PortalConnection.connecting
+              ? null
+              : controller.refresh,
+        ),
       ],
       child: body,
     );
-  }
-
-  Future<void> _confirmDisconnect() async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Disconnect from the gateway?'),
-        content: const Text(
-          'This app forgets the address and admin token. The gateway, its '
-          'portals and tokens keep running.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            key: const ValueKey('confirm-disconnect'),
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Disconnect'),
-          ),
-        ],
-      ),
-    );
-    if (ok == true) {
-      await ref.read(portalControllerProvider.notifier).disconnect();
-      if (mounted) setState(() => _editConnection = false);
-    }
   }
 }
 
@@ -154,7 +69,7 @@ class _Tabs extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 4,
+      length: 2,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: const [
@@ -163,22 +78,11 @@ class _Tabs extends StatelessWidget {
             tabAlignment: TabAlignment.start,
             tabs: [
               Tab(text: 'Portals'),
-              Tab(text: 'Servers'),
               Tab(text: 'Access'),
-              Tab(text: 'Activity'),
             ],
           ),
           SizedBox(height: 12),
-          Expanded(
-            child: TabBarView(
-              children: [
-                PortalsTab(),
-                ServersTab(),
-                AccessTab(),
-                ActivityTab(),
-              ],
-            ),
-          ),
+          Expanded(child: TabBarView(children: [PortalsTab(), AccessTab()])),
         ],
       ),
     );
@@ -214,34 +118,19 @@ class _Banner extends StatelessWidget {
 }
 
 class _Unreachable extends StatelessWidget {
-  const _Unreachable({
-    required this.error,
-    required this.onRetry,
-    required this.onEdit,
-  });
+  const _Unreachable({required this.error, required this.onRetry});
   final String? error;
   final VoidCallback onRetry;
-  final VoidCallback onEdit;
 
   @override
   Widget build(BuildContext context) => EmptyState(
     icon: Icons.cloud_off_outlined,
-    title: 'Gateway not reachable',
-    message: error ?? 'The gateway did not answer.',
-    action: Wrap(
-      spacing: 8,
-      children: [
-        FilledButton(
-          key: const ValueKey('gateway-retry'),
-          onPressed: onRetry,
-          child: const Text('Try again'),
-        ),
-        OutlinedButton(
-          key: const ValueKey('gateway-edit'),
-          onPressed: onEdit,
-          child: const Text('Change address or token'),
-        ),
-      ],
+    title: 'Server not reachable',
+    message: error ?? 'The server did not answer.',
+    action: FilledButton(
+      key: const ValueKey('gateway-retry'),
+      onPressed: onRetry,
+      child: const Text('Try again'),
     ),
   );
 }

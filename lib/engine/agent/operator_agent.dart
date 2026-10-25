@@ -310,7 +310,7 @@ class OperatorAgent {
     if (needsApproval) {
       final decision = await requestApproval(call, tool);
       if (decision == ApprovalDecision.deny || isCancelled()) {
-        tool.onDenied(
+        await tool.onDenied(
           call.arguments,
           ToolRunContext(
             actor: actor,

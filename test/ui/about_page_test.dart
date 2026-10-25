@@ -5,6 +5,7 @@ import 'package:mcp_manager/engine/app_info.dart';
 
 import '../support/app_harness.dart';
 import '../support/fakes.dart';
+import '../support/gateway_harness.dart';
 
 /// The pages are lazy lists: scroll until the widget is built, then tap it.
 Future<void> _reveal(WidgetTester tester, Finder f) async {
@@ -131,21 +132,24 @@ void main() {
         );
 
         await _tapVisible(tester, find.text('Where your data lives'));
-        expect(find.textContaining('local storage'), findsWidgets);
+        expect(find.textContaining('PostgreSQL'), findsOneWidget);
+        expect(find.textContaining('private to the person'), findsOneWidget);
         await _tapVisible(tester, find.text('Tips'));
         expect(find.textContaining('Shift+Enter'), findsOneWidget);
       },
     );
 
-    testWidgets('"This copy" shows the origin and the OAuth redirect URI', (
-      tester,
-    ) async {
-      await pumpApp(tester);
-      await goTo(tester, '/info');
-      await _tapVisible(tester, find.text('This copy'));
-      expect(find.text('https://app.test'), findsOneWidget);
-      expect(find.text(oauthRedirect), findsOneWidget);
-    });
+    testWidgets(
+      '"This copy" shows the server, who is signed in and the OAuth redirect URI',
+      (tester) async {
+        await pumpApp(tester);
+        await goTo(tester, '/info');
+        await _tapVisible(tester, find.text('This copy'));
+        expect(find.text(gatewayUrl), findsOneWidget);
+        expect(find.text('Admin token'), findsOneWidget);
+        expect(find.text(oauthRedirect), findsOneWidget);
+      },
+    );
 
     testWidgets('links open through the launcher', (tester) async {
       final opened = <Uri>[];

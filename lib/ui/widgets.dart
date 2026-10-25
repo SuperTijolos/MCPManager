@@ -1,3 +1,5 @@
+import '../engine/server/server_client.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -282,6 +284,19 @@ String formatAgo(DateTime t, {DateTime? now}) {
   if (age.inMinutes < 60) return '${age.inMinutes} min ago';
   if (age.inHours < 24) return '${age.inHours} h ago';
   return formatDateTime(t);
+}
+
+/// Runs a change on the server and says so in a snack bar if the server
+/// refuses it or cannot be reached.
+Future<void> serverAction(
+  BuildContext context,
+  Future<void> Function() action,
+) async {
+  try {
+    await action();
+  } on ServerException catch (e) {
+    if (context.mounted) showSnack(context, e.message);
+  }
 }
 
 void showSnack(BuildContext context, String message) {

@@ -1,12 +1,12 @@
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/json.dart';
 import '../core/prefs.dart';
+import '../server/server_client.dart';
+import '../server/session.dart';
 
-const _indexKey = 'mcpm.chats.index.v1';
 const _activeKey = 'mcpm.chats.active.v1';
-const _legacyKey = 'mcpm.chat.v1';
-String _contentKey(String id) => 'mcpm.chat.$id.v1';
 
 /// How many conversations are kept; the oldest are dropped beyond this.
 const maxConversations = 40;
@@ -81,32 +81,87 @@ String titleFromPrompt(String prompt) {
   return line.length > 48 ? '${line.substring(0, 48).trimRight()}…' : line;
 }
 
-/// Persistence for the conversation list and each conversation's content. Each
-/// conversation lives under its own key so saving one never rewrites the rest.
-class ChatStore {
-  ChatStore(this._prefs);
+final chatStoreProvider = Provider<ChatStore>((ref) {
+  final store = ChatStore(
+    ref.watch(serverClientProvider),
+    ref.watch(sharedPreferencesProvider),
+  );
+  ref.onDispose(store.dispose);
+  return store;
+});
 
+/// The conversation list and each conversation's content, kept on the server
+/// (private to the signed-in person). Reads come from a local copy so the chat
+/// stays quick; writes are queued and sent in order. Which conversation is
+/// open is a local preference.
+class ChatStore {
+  ChatStore(this._client, this._prefs);
+
+  final ServerClient? _client;
   final SharedPreferences _prefs;
 
-  List<ConversationMeta> index() {
-    final raw = readJson(_prefs, _indexKey);
-    if (raw is! List) return const [];
-    final list = <ConversationMeta>[];
-    for (final item in raw) {
-      try {
-        list.add(
-          ConversationMeta.fromJson((item as Map).cast<String, dynamic>()),
-        );
-      } catch (_) {
-        // Skip entries from an incompatible version.
-      }
+  var _index = <ConversationMeta>[];
+  final _content = <String, StoredConversation>{};
+  Future<void> _queue = Future.value();
+  var _pending = 0;
+  var _disposed = false;
+
+  /// Whether writes are still on their way to the server.
+  bool get busy => _pending > 0;
+
+  /// Completes when every write so far has reached the server.
+  Future<void> get flushed => _queue;
+
+  /// Loads the list from the server (and replaces the local copy).
+  Future<List<ConversationMeta>> loadIndex() async {
+    final client = _client;
+    if (client == null) return _index;
+    try {
+      final list = await client.getList('/api/chats');
+      if (_disposed) return _index;
+      _index = [for (final j in list) ?_meta(j)]
+        ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    } on ServerException {
+      // Keep the copy we have.
     }
-    list.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
-    return list;
+    return _index;
   }
 
-  void saveIndex(List<ConversationMeta> list) {
-    writeJson(_prefs, _indexKey, [for (final m in list) m.toJson()]);
+  ConversationMeta? _meta(Json j) {
+    try {
+      return ConversationMeta.fromJson({
+        ...j,
+        'createdAt': j['createdAt'],
+        'updatedAt': j['updatedAt'],
+      });
+    } catch (_) {
+      return null;
+    }
+  }
+
+  List<ConversationMeta> index() => List.of(_index);
+
+  /// Fetches one conversation's content from the server into the local copy.
+  Future<StoredConversation?> fetch(String id) async {
+    final cached = _content[id];
+    if (cached != null) return cached;
+    final client = _client;
+    if (client == null) return null;
+    try {
+      final j = await client.getMap('/api/chats/$id');
+      List<Json> list(Object? v) => [
+        for (final e in (v as List?) ?? const [])
+          if (e is Map) e.cast<String, dynamic>(),
+      ];
+      final stored = StoredConversation(
+        items: list(j['items']),
+        history: list(j['history']),
+      );
+      _content[id] = stored;
+      return stored;
+    } on ServerException {
+      return null;
+    }
   }
 
   String? activeId() => _prefs.getString(_activeKey);
@@ -119,68 +174,59 @@ class ChatStore {
     }
   }
 
-  StoredConversation? load(String id) {
-    final raw = readJson(_prefs, _contentKey(id));
-    if (raw is! Map) return null;
-    List<Json> list(Object? v) => [
-      for (final e in (v as List?) ?? const [])
-        if (e is Map) e.cast<String, dynamic>(),
-    ];
-    return StoredConversation(
-      items: list(raw['items']),
-      history: list(raw['history']),
+  /// The content already fetched or saved here, if any.
+  StoredConversation? load(String id) => _content[id];
+
+  void save(String id, StoredConversation content) {
+    _content[id] = content;
+    _enqueue(
+      () => _client?.putMap('/api/chats/$id', {
+        'items': content.items,
+        'history': content.history,
+      }),
     );
   }
 
-  void save(String id, StoredConversation content) {
-    writeJson(_prefs, _contentKey(id), {
-      'items': content.items,
-      'history': content.history,
+  /// Records the list after a change: renames, approval mode, and new
+  /// conversations get their title on the server.
+  void saveIndex(List<ConversationMeta> list) {
+    final before = {for (final m in _index) m.id: m};
+    for (final m in list) {
+      final old = before[m.id];
+      if (old == null ||
+          old.title != m.title ||
+          old.autoApprove != m.autoApprove) {
+        _enqueue(
+          () => _client?.putMap('/api/chats/${m.id}', {
+            'title': m.title,
+            'autoApprove': m.autoApprove,
+          }),
+        );
+      }
+    }
+    _index = List.of(list);
+  }
+
+  void delete(String id) {
+    _content.remove(id);
+    _enqueue(() => _client?.delete('/api/chats/$id'));
+  }
+
+  void _enqueue(Future<Object?>? Function() send) {
+    if (_client == null) return;
+    _pending++;
+    _queue = _queue.then((_) async {
+      try {
+        await send();
+      } on ServerException {
+        // A write that fails is retried by the next save of that conversation.
+      } finally {
+        _pending--;
+      }
     });
   }
 
-  void delete(String id) => _prefs.remove(_contentKey(id));
-
-  /// Moves the single conversation of the first version (`mcpm.chat.v1`) into
-  /// the list, once.
-  List<ConversationMeta> migrateLegacy(
-    List<ConversationMeta> current,
-    String Function() newId,
-  ) {
-    final raw = readJson(_prefs, _legacyKey);
-    if (raw is! Map) return current;
-    _prefs.remove(_legacyKey);
-    final items = ((raw['items'] as List?) ?? const [])
-        .whereType<Map>()
-        .toList();
-    if (items.isEmpty) return current;
-    final firstUser = items.firstWhere(
-      (i) => i['type'] == 'user',
-      orElse: () => const {},
-    );
-    final id = newId();
-    final now = DateTime.now();
-    save(
-      id,
-      StoredConversation(
-        items: [for (final i in items) i.cast<String, dynamic>()],
-        history: [
-          for (final m in (raw['history'] as List?) ?? const [])
-            if (m is Map) m.cast<String, dynamic>(),
-        ],
-      ),
-    );
-    final meta = ConversationMeta(
-      id: id,
-      title: titleFromPrompt('${firstUser['text'] ?? ''}'),
-      createdAt: now,
-      updatedAt: now,
-      messageCount: items.where((i) => i['type'] == 'user').length,
-    );
-    final next = [meta, ...current];
-    saveIndex(next);
-    return next;
-  }
+  void dispose() => _disposed = true;
 }
 
 /// Which heading a conversation sits under in the history list.

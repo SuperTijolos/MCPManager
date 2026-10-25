@@ -1,8 +1,5 @@
-import 'dart:convert';
-
-import 'package:http/http.dart' as http;
-
 import '../core/json.dart';
+import '../server/server_client.dart';
 import 'portal_models.dart';
 
 /// The gateway said no, or could not be reached.
@@ -21,19 +18,11 @@ class PortalApiException implements Exception {
   String toString() => message;
 }
 
-/// A client for the gateway's admin API.
+/// The portal part of the server's API, with the signed-in session.
 class PortalApi {
-  PortalApi({
-    required String baseUrl,
-    required this.token,
-    required this.client,
-    this.timeout = const Duration(seconds: 30),
-  }) : baseUrl = baseUrl.replaceAll(RegExp(r'/+$'), '');
+  PortalApi(this.client);
 
-  final String baseUrl;
-  final String token;
-  final Duration timeout;
-  final http.Client client;
+  final ServerClient client;
 
   Future<Object?> _send(
     String method,
@@ -41,59 +30,19 @@ class PortalApi {
     Object? body,
     Map<String, String>? query,
   }) async {
-    final uri = Uri.parse('$baseUrl$path').replace(queryParameters: query);
-    final request = http.Request(method, uri)
-      ..headers['authorization'] = 'Bearer $token'
-      ..headers['accept'] = 'application/json';
-    if (body != null) {
-      request.headers['content-type'] = 'application/json';
-      request.body = jsonEncode(body);
-    }
-    final http.Response response;
     try {
-      response = await http.Response.fromStream(
-        await client.send(request).timeout(timeout),
-      );
-    } on http.ClientException catch (e) {
+      return await client.send(method, path, body: body, query: query);
+    } on ServerException catch (e) {
       throw PortalApiException(
-        'Could not reach the gateway at $baseUrl (${e.message}). Check that it '
-        'is running and, from a browser, that it allows this origin.',
+        e.unauthorized
+            ? 'Your session has ended. Sign in again.'
+            : e.unreachable
+            ? e.message
+            : e.detail ?? _explain(e.code),
+        status: e.status == 0 ? null : e.status,
+        code: e.code,
       );
-    } on Object catch (e) {
-      throw PortalApiException('Could not reach the gateway at $baseUrl ($e).');
     }
-
-    Object? decoded;
-    if (response.body.isNotEmpty) {
-      try {
-        decoded = jsonDecode(response.body);
-      } catch (_) {
-        decoded = null;
-      }
-    }
-    if (response.statusCode >= 200 && response.statusCode < 300) {
-      if (decoded == null && response.body.isNotEmpty) {
-        throw PortalApiException(
-          '$baseUrl did not answer like an MCP Manager gateway.',
-          status: response.statusCode,
-        );
-      }
-      return decoded;
-    }
-    final map = decoded is Map
-        ? decoded.cast<String, dynamic>()
-        : const <String, dynamic>{};
-    final code = map['error'] as String?;
-    throw PortalApiException(
-      response.statusCode == 401
-          ? 'The gateway rejected the admin token.'
-          : (map['message'] as String?) ??
-                (code == null
-                    ? 'The gateway answered HTTP ${response.statusCode}.'
-                    : _explain(code)),
-      status: response.statusCode,
-      code: code,
-    );
   }
 
   static String _explain(String code) => switch (code) {
@@ -121,43 +70,6 @@ class PortalApi {
     for (final j in _list(await _send('GET', '/api/servers')))
       GatewayServer.fromJson(j),
   ];
-
-  /// Creates or replaces the server under [id]. [headers] are sent only when
-  /// given; leaving them out keeps the ones the gateway has.
-  Future<GatewayServer> saveServer({
-    required String id,
-    required String name,
-    required String url,
-    Map<String, String>? headers,
-    String? transport,
-    bool? enabled,
-    String? slug,
-  }) async => GatewayServer.fromJson(
-    _map(
-      await _send(
-        'PUT',
-        '/api/servers/${Uri.encodeComponent(id)}',
-        body: {
-          'name': name,
-          'url': url,
-          'headers': ?headers,
-          'transport': ?transport,
-          'enabled': ?enabled,
-          'slug': ?slug,
-        },
-      ),
-    ),
-  );
-
-  Future<void> deleteServer(String id) =>
-      _send('DELETE', '/api/servers/${Uri.encodeComponent(id)}');
-
-  Future<GatewayTestResult> testServer(String id) async =>
-      GatewayTestResult.fromJson(
-        _map(
-          await _send('POST', '/api/servers/${Uri.encodeComponent(id)}/test'),
-        ),
-      );
 
   // ----------------------------------------------------------------- portals
 
@@ -252,35 +164,4 @@ class PortalApi {
 
   Future<void> revokeToken(String id) =>
       _send('DELETE', '/api/tokens/${Uri.encodeComponent(id)}');
-
-  // ------------------------------------------------------------------- rules
-
-  /// Replaces the gateway's rules and overrides (same format the app saves).
-  Future<void> putRules(Json document) =>
-      _send('PUT', '/api/rules', body: document);
-
-  Future<Json> rules() async => _map(await _send('GET', '/api/rules'));
-
-  // ------------------------------------------------------------------- audit
-
-  Future<List<GatewayEvent>> audit({
-    int limit = 100,
-    String? portalId,
-    String? status,
-    String? query,
-  }) async {
-    final json = _map(
-      await _send(
-        'GET',
-        '/api/audit',
-        query: {
-          'limit': '$limit',
-          'portal': ?portalId,
-          'status': ?status,
-          if (query != null && query.isNotEmpty) 'q': query,
-        },
-      ),
-    );
-    return [for (final e in _list(json['events'])) GatewayEvent.fromJson(e)];
-  }
 }

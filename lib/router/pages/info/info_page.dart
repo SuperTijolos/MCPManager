@@ -4,7 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../engine/app_info.dart';
-import '../../../engine/mcp/oauth/oauth_service.dart';
+import '../../../engine/server/session.dart';
 import '../../../ui/links.dart';
 import '../../../ui/theme.dart';
 import '../../../ui/widgets.dart';
@@ -70,8 +70,8 @@ class InfoPage extends ConsumerWidget {
                       route: '/portals',
                       body:
                           'Publish chosen servers as authenticated MCP endpoints for Claude, ChatGPT or any MCP client. '
-                          'Portals run on the gateway, a small server you host: it applies your tool rules, checks access '
-                          'tokens or OAuth sign-ins, forwards each call and keeps its own audit log. This page manages it.',
+                          'Portals are served by your MCP Manager server: it applies your tool rules, checks access '
+                          'tokens or OAuth sign-ins, forwards each call and records it in the same audit log. This page manages them.',
                     ),
                   ),
                   tile(
@@ -102,8 +102,8 @@ class InfoPage extends ConsumerWidget {
                       title: 'Settings',
                       route: '/settings',
                       body:
-                          'Model providers and which models are on, Operator limits and your own instructions, plus storage, '
-                          'backup and restore (credentials left out unless you ask) and a full reset.',
+                          'Model providers (their keys stay on the server) and which models are on, Operator limits and '
+                          'your own instructions, plus who is signed in, where the data lives and clean-up.',
                     ),
                   ),
                   tile(
@@ -145,24 +145,26 @@ class InfoPage extends ConsumerWidget {
                 points: [
                   'Transports: Streamable HTTP (usually /mcp) and legacy HTTP+SSE (usually /sse). Auto-detect tries both, '
                       'tries the sibling path, and accepts a transport only when it can also list tools.',
-                  'Authentication: none, a bearer token, or OAuth with PKCE and dynamic client registration. Sign-in '
-                      'returns to this app\'s callback page, which the server\'s OAuth provider must allow. Servers set up '
-                      'only for ChatGPT (https://chatgpt.com/connector/oauth/*) reject it until that is added.',
-                  'Because this runs in a browser, every server must allow CORS for this origin and accept the '
-                      'Authorization header; for Streamable HTTP sessions it must also expose Mcp-Session-Id.',
-                  'stdio servers cannot be reached from a browser.',
+                  'Authentication: none, a bearer token, or OAuth with PKCE and dynamic client registration. Your MCP '
+                      'Manager server signs in once, for everyone; the sign-in returns to the server\'s own callback address, '
+                      'which the upstream\'s OAuth provider must allow. Servers set up only for ChatGPT '
+                      '(https://chatgpt.com/connector/oauth/*) reject it until that is added.',
+                  'Your MCP Manager server connects to the servers, not the browser, so they need no CORS settings. '
+                      'They must be reachable from the machine the server runs on.',
+                  'stdio servers cannot be reached: only HTTP ones.',
                 ],
               ),
               const _Details(
                 icon: Icons.storage_outlined,
                 title: 'Where your data lives',
                 points: [
-                  'Everything is stored in this browser\'s local storage, per origin. Nothing is sent to a MCP Manager '
-                      'server because there is none.',
-                  'Tokens and API keys are stored there too, unencrypted, so use a browser profile you trust. Backups '
-                      'leave credentials out unless you tick the box.',
-                  'A browser gives an origin about 5 MB; Settings → Data & privacy shows how much is used.',
-                  'Another browser, device or address (even localhost vs an IP) starts empty: use export and import.',
+                  'Servers, rules, portals, access tokens, the audit log, conversations and model providers live on '
+                      'your MCP Manager server, in its PostgreSQL database. Back that up to back everything up.',
+                  'Credentials (server headers, OAuth sign-ins, provider keys) stay on the server: the dashboard never '
+                      'receives them again, only that they exist. They are not encrypted at rest, so protect the database.',
+                  'This browser keeps the server\'s address, your sign-in, and a few preferences (which model you chat '
+                      'with, the open conversation, layout).',
+                  'Conversations are private to the person who made them; everything else is shared by the team.',
                 ],
               ),
               const _Details(
@@ -470,9 +472,11 @@ class _Facts extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final redirect = ref.watch(oauthRedirectUriProvider);
+    final session = ref.watch(sessionProvider);
     final rows = {
       'Version': '$appVersion (${kReleaseMode ? 'release' : 'debug'})',
-      'Origin': '${redirect.scheme}://${redirect.authority}',
+      'Server': session.serverUrl ?? 'Not set',
+      'Signed in as': session.identity?.label ?? 'Nobody',
       'OAuth redirect URI': redirect.toString(),
       'Platform': 'Web',
     };

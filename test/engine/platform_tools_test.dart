@@ -8,13 +8,16 @@ import 'package:mcp_manager/engine/agent/operator_agent.dart';
 import 'package:mcp_manager/engine/agent/toolbox.dart';
 import 'package:mcp_manager/engine/audit/audit_log.dart';
 import 'package:mcp_manager/engine/audit/audit_models.dart';
+import 'package:mcp_manager/engine/agent/chat_store.dart';
 import 'package:mcp_manager/engine/core/prefs.dart';
 import 'package:mcp_manager/engine/llm/llm_settings.dart';
 import 'package:mcp_manager/engine/llm/llm_types.dart';
 import 'package:mcp_manager/engine/mcp/mcp_hub.dart';
-import 'package:mcp_manager/engine/mcp/oauth/oauth_service.dart';
+import 'package:mcp_portal_server/mcp_portal_server.dart'
+    show ChatContent, GatewayAuditEvent;
 
 import '../support/fakes.dart';
+import '../support/gateway_harness.dart';
 
 final _tools = [
   {
@@ -53,15 +56,18 @@ Future<ProviderContainer> _container({
   FakeMcpServer? server,
   LlmProvider? llm,
   dynamic httpClient,
+  TestGateway? gateway,
   Map<String, Object> prefs = const {},
 }) async {
   final c = await makeContainer(
     server: httpClient == null ? (server ?? _mcp()) : null,
     httpClient: httpClient,
+    gateway: gateway,
     llm: llm,
     prefs: prefs,
   );
   addTearDown(c.dispose);
+  await c.read(chatControllerProvider.notifier).loaded;
   return c;
 }
 
@@ -156,7 +162,10 @@ void main() {
         expect(result.text, isNot(contains('tok-123456789')));
 
         final config = c.read(mcpHubProvider).servers.single.config;
-        expect(config.headers['Authorization'], 'Bearer tok-123456789');
+        expect(
+          gatewayOf(c).state.server(config.id)!.headers['Authorization'],
+          'Bearer tok-123456789',
+        );
       },
     );
 
@@ -287,7 +296,7 @@ void main() {
         final out = _json(await _run(c, 'mcpm_oauth_redirect_uri', {}));
         expect(out['redirectUri'], oauthRedirect);
         expect(out['note'], contains('chatgpt.com/connector/oauth/*'));
-        expect(out['note'], contains('CORS'));
+        expect(out['note'], contains('callback'));
       },
     );
   });
@@ -329,7 +338,10 @@ void main() {
             .servers
             .firstWhere((s) => s.config.name == 'Handbook')
             .config;
-        expect(config.headers['Authorization'], 'Bearer tok-keep-me-1234');
+        expect(
+          gatewayOf(c).state.server(config.id)!.headers['Authorization'],
+          'Bearer tok-keep-me-1234',
+        );
       },
     );
 
@@ -395,7 +407,7 @@ void main() {
       );
     });
 
-    test('removing a server drops its OAuth session', () async {
+    test('removing a server drops its OAuth session on the server', () async {
       final world = FakeOAuthWorld(mcp: _mcp());
       final c = await _container(httpClient: world.client);
       await _run(c, 'mcpm_add_server', {
@@ -404,13 +416,13 @@ void main() {
         'auth': 'oauth',
       });
       final id = c.read(mcpHubProvider).servers.single.config.id;
-      await c
-          .read(mcpHubProvider.notifier)
-          .authorize(id, FakePopup.approving(world));
-      expect(c.read(oauthServiceProvider).isSignedIn(id), isTrue);
+      final gateway = gatewayOf(c);
+      final popup = FakePopup.approving(world, gateway);
+      await c.read(mcpHubProvider.notifier).authorize(id, popup);
+      expect(gateway.state.upstreamOAuth[id]?.tokens, isNotNull);
 
       await _run(c, 'mcpm_remove_server', {'server': 'P'});
-      expect(c.read(oauthServiceProvider).sessionFor(id), isNull);
+      expect(gateway.state.upstreamOAuth[id], isNull);
     });
   });
 
@@ -454,29 +466,35 @@ void main() {
 
     test('recent_audit filters by status, tool, text and age', () async {
       final c = await _container();
-      final log = c.read(auditLogProvider.notifier);
-      void rec(
+      final gateway = gatewayOf(c);
+      var n = 0;
+      Future<void> rec(
         AuditStatus s,
         String tool, {
         String? args,
         String actor = 'user',
-      }) => log.record(
-        kind: AuditKind.toolCall,
-        status: s,
-        source: AuditSource.workbench,
-        actor: actor,
-        serverName: 'Srv',
-        toolName: tool,
-        args: args,
+      }) => gateway.server.audit.record(
+        GatewayAuditEvent(
+          id: 'e${n++}',
+          timestamp: DateTime.now(),
+          source: 'dashboard',
+          principal: const {'kind': 'admin', 'id': 'admin', 'name': 'Admin'},
+          status: s.name,
+          serverName: 'Srv',
+          tool: tool,
+          args: args,
+          actor: actor,
+        ),
       );
-      rec(AuditStatus.success, 'alpha', args: '{"q":"apples"}');
-      rec(
+      await rec(AuditStatus.success, 'alpha', args: '{"q":"apples"}');
+      await rec(
         AuditStatus.error,
         'beta',
         args: '{"q":"pears"}',
         actor: 'operator:gemma4',
       );
-      rec(AuditStatus.denied, 'gamma');
+      await rec(AuditStatus.denied, 'gamma');
+      await c.read(auditLogProvider.notifier).reload();
 
       Future<List> query(Map<String, dynamic> a) async =>
           jsonDecode((await _run(c, 'mcpm_recent_audit', a)).text) as List;
@@ -492,15 +510,20 @@ void main() {
 
     test('clear_audit wipes the log but records that it happened', () async {
       final c = await _container();
-      final log = c.read(auditLogProvider.notifier);
+      final gateway = gatewayOf(c);
       for (var i = 0; i < 3; i++) {
-        log.record(
-          kind: AuditKind.toolCall,
-          status: AuditStatus.success,
-          source: AuditSource.workbench,
-          actor: 'user',
+        await gateway.server.audit.record(
+          GatewayAuditEvent(
+            id: 'e$i',
+            timestamp: DateTime.now(),
+            source: 'dashboard',
+            principal: const {'kind': 'admin', 'id': 'admin', 'name': 'Admin'},
+            status: 'success',
+            actor: 'user',
+          ),
         );
       }
+      await c.read(auditLogProvider.notifier).reload();
       final out = _json(await _run(c, 'mcpm_clear_audit', {}));
       expect(out['cleared'], 3);
       final left = c.read(auditLogProvider);
@@ -728,21 +751,23 @@ void main() {
   });
 
   group('conversation persistence', () {
-    /// Everything the chat stored, as a fresh browser profile would see it.
-    Map<String, Object> chatPrefs(ProviderContainer c) {
+    /// What this browser remembers: which conversation was open.
+    Future<Map<String, Object>> chatPrefs(ProviderContainer c) async {
+      await c.read(chatStoreProvider).flushed;
       final sp = c.read(sharedPreferencesProvider);
       return {
         for (final k in sp.getKeys())
-          if (k.startsWith('mcpm.chat')) k: sp.get(k)!,
+          if (k.startsWith('mcpm.chats.')) k: sp.get(k)!,
       };
     }
 
     test('a finished conversation is restored after a restart, and the model keeps its context', () async {
+      final gateway = await TestGateway.start(upstream: _mcp());
       final llm = ScriptedLlm([
         [_call('c1', 'mcpm_list_servers')],
         [const LlmTextDelta('No servers yet.'), const LlmDone()],
       ]);
-      final first = await _container(llm: llm);
+      final first = await _container(llm: llm, gateway: gateway);
       await first
           .read(chatControllerProvider.notifier)
           .send('what servers do I have?');
@@ -750,7 +775,11 @@ void main() {
       final llm2 = ScriptedLlm([
         [const LlmTextDelta('Still none.'), const LlmDone()],
       ]);
-      final second = await _container(llm: llm2, prefs: chatPrefs(first));
+      final second = await _container(
+        llm: llm2,
+        gateway: gateway,
+        prefs: await chatPrefs(first),
+      );
       final restored = second.read(chatControllerProvider).items;
       expect(
         restored.whereType<UserItem>().single.text,
@@ -774,6 +803,7 @@ void main() {
     });
 
     test('a call that was waiting for approval when the page closed comes back as interrupted', () async {
+      final gateway = await TestGateway.start(upstream: _mcp());
       final llm = ScriptedLlm([
         [
           _call('c1', 'mcpm_add_server', {
@@ -782,7 +812,7 @@ void main() {
           }),
         ],
       ]);
-      final first = await _container(llm: llm);
+      final first = await _container(llm: llm, gateway: gateway);
       final controller = first.read(chatControllerProvider.notifier);
       final run = controller.send('add it');
       await pumpEventQueue();
@@ -790,17 +820,23 @@ void main() {
 
       controller.stop();
       await run;
-      // Force the in-flight state into storage, as if the page died first.
-      final prefs = chatPrefs(first);
+      // Put the in-flight state on the server, as if the page died first.
+      final prefs = await chatPrefs(first);
       final id = first.read(chatControllerProvider).activeId!;
-      final key = 'mcpm.chat.$id.v1';
-      final stored = jsonDecode(prefs[key]! as String) as Map;
-      (stored['items'] as List).lastWhere(
-        (i) => i['type'] == 'tool',
-      )['status'] = 'awaitingApproval';
-      prefs[key] = jsonEncode(stored);
+      final doc = (await gateway.server.chats.get(id))!;
+      final items = [
+        for (final i in doc.content.items) {...i},
+      ];
+      items.lastWhere((i) => i['type'] == 'tool')['status'] =
+          'awaitingApproval';
+      await gateway.server.chats.save(
+        id,
+        'admin',
+        DateTime.now(),
+        content: ChatContent(items: items, history: doc.content.history),
+      );
 
-      final second = await _container(prefs: prefs);
+      final second = await _container(gateway: gateway, prefs: prefs);
       final tool = second
           .read(chatControllerProvider)
           .items
@@ -809,63 +845,5 @@ void main() {
       expect(tool.status, ToolStatus.error);
       expect(tool.output, contains('Interrupted'));
     });
-  });
-
-  group('transports', () {
-    test('adding a legacy-SSE bridge from just host:port reports what was detected', () async {
-      final bridge = FakeSseServer(
-        tools: _tools,
-        requireToken: 'tok',
-        handlers: {'lookup': (_) => textResult('x')},
-      );
-      final c = await _container(httpClient: bridge.client);
-
-      final r = await _run(c, 'mcpm_add_server', {
-        'name': 'VS Code',
-        'url': 'localhost:3333',
-        'auth': 'bearer',
-        'bearer_token': 'tok',
-      });
-
-      expect(r.isError, isFalse, reason: r.text);
-      final out = _json(r);
-      expect(out['status'], 'connected');
-      expect(out['transport'], 'sse');
-      expect(out['url'], 'http://localhost:3333/sse');
-      expect(out['tools'], 1);
-      expect(r.text, isNot(contains('"tok"')));
-    });
-
-    test(
-      'an explicit transport is accepted; unknown ones are rejected clearly',
-      () async {
-        final bridge = FakeSseServer(tools: _tools);
-        final c = await _container(httpClient: bridge.client);
-
-        final bad = await _run(c, 'mcpm_add_server', {
-          'name': 'A',
-          'url': 'http://localhost:3333/sse',
-          'transport': 'websocket',
-        });
-        expect(bad.isError, isTrue);
-        expect(bad.text, contains('auto, streamable-http, sse'));
-
-        final ok = _json(
-          await _run(c, 'mcpm_add_server', {
-            'name': 'B',
-            'url': 'http://localhost:3333/sse',
-            'transport': 'sse',
-          }),
-        );
-        expect(ok['transport'], 'sse');
-        expect(
-          _tool(
-            c,
-            'mcpm_add_server',
-          ).summarize({'name': 'B', 'url': 'x', 'transport': 'sse'}),
-          contains('transport: sse'),
-        );
-      },
-    );
   });
 }

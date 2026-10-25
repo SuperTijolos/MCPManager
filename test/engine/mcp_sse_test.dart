@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -477,35 +476,32 @@ void main() {
       );
     });
 
-    test('once detected, the next start connects directly', () async {
-      final first = _server(token: 'tok');
-      final c1 = await makeContainer(httpClient: first.client);
-      final runtime = await c1
-          .read(mcpHubProvider.notifier)
-          .addServer(
-            name: 'VS Code',
-            url: 'http://localhost:3333',
-            headers: {'Authorization': 'Bearer tok'},
-          );
-      final stored = c1.read(mcpHubProvider).servers.single.config.toJson();
-      c1.dispose();
+    test('once detected, the next connect goes directly', () async {
+      final bridge = _server(token: 'tok');
+      final c = await makeContainer(httpClient: bridge.client);
+      addTearDown(c.dispose);
+      final hub = c.read(mcpHubProvider.notifier);
+      final runtime = await hub.addServer(
+        name: 'VS Code',
+        url: 'http://localhost:3333',
+        headers: {'Authorization': 'Bearer tok'},
+      );
       expect(runtime.config.transport, McpTransport.sse);
 
-      final second = _server(token: 'tok');
-      final c2 = await makeContainer(
-        httpClient: second.client,
-        prefs: {'mcpm.servers.v1': '[${_encode(stored)}]'},
-      );
-      addTearDown(c2.dispose);
-      c2.read(mcpHubProvider);
-      await pumpEventQueue();
+      // The server remembers what worked, so it connects there from now on.
+      final saved = gatewayOf(c).state.server(runtime.config.id)!;
+      expect(saved.url, 'http://localhost:3333/sse');
+      expect(saved.transport, McpTransport.sse);
 
+      final mark = bridge.log.length;
+      await hub.connect(runtime.config.id);
+      final since = bridge.log.sublist(mark);
       expect(
-        c2.read(mcpHubProvider).servers.single.status,
+        c.read(mcpHubProvider).servers.single.status,
         ServerStatus.connected,
       );
-      expect(second.log.first, 'GET /sse', reason: 'no wasted POST attempts');
-      expect(second.log.where((l) => l.startsWith('POST /sse')), isEmpty);
+      expect(since.first, 'GET /sse', reason: 'no wasted POST attempts');
+      expect(since.where((l) => l.startsWith('POST /sse')), isEmpty);
     });
 
     test(
@@ -616,5 +612,3 @@ void main() {
     );
   });
 }
-
-String _encode(Object o) => jsonEncode(o);

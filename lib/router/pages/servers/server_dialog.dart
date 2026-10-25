@@ -7,7 +7,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../engine/core/url.dart';
 import '../../../engine/mcp/mcp_hub.dart';
 import '../../../engine/mcp/mcp_models.dart';
-import '../../../engine/mcp/oauth/oauth_service.dart';
+import '../../../engine/server/server_client.dart';
+import '../../../engine/server/session.dart';
 import '../../../ui/theme.dart';
 import '../../../ui/widgets.dart';
 
@@ -35,12 +36,15 @@ Future<void> showServerDialog(
 enum _Auth { none, bearer, oauth }
 
 class _HeaderRow {
-  _HeaderRow([String name = '', String value = ''])
+  /// A [stored] row has a value on the server that is never shown here: left
+  /// blank it stays as it is, typed over it replaces it.
+  _HeaderRow([String name = '', String value = '', this.stored = false])
     : name = TextEditingController(text: name),
-      value = TextEditingController(text: value);
+      value = TextEditingController(text: stored ? '' : value);
 
   final TextEditingController name;
   final TextEditingController value;
+  final bool stored;
 
   void dispose() {
     name.dispose();
@@ -70,6 +74,9 @@ class _ServerDialogState extends ConsumerState<ServerDialog> {
   late _Auth _auth;
   late McpTransport _transport;
   bool _showToken = false;
+
+  /// The server already holds a bearer token for this server.
+  bool _tokenStored = false;
   bool _testing = false;
   ProbeResult? _probe;
 
@@ -87,7 +94,11 @@ class _ServerDialogState extends ConsumerState<ServerDialog> {
     final authEntry = extra.entries
         .where((e) => e.key.toLowerCase() == 'authorization')
         .firstOrNull;
-    if (authEntry != null &&
+    if (authEntry != null && authEntry.value == maskedHeaderValue) {
+      // A token is stored on the server; its value is not sent back.
+      _tokenStored = true;
+      extra.remove(authEntry.key);
+    } else if (authEntry != null &&
         authEntry.value.toLowerCase().startsWith('bearer ')) {
       token = authEntry.value.substring(7);
       extra.remove(authEntry.key);
@@ -96,7 +107,7 @@ class _ServerDialogState extends ConsumerState<ServerDialog> {
         ? _Auth.none
         : c.oauth
         ? _Auth.oauth
-        : token.isNotEmpty
+        : token.isNotEmpty || _tokenStored
         ? _Auth.bearer
         : _Auth.none;
     _transport = c?.transport ?? McpTransport.auto;
@@ -105,7 +116,10 @@ class _ServerDialogState extends ConsumerState<ServerDialog> {
     _token = TextEditingController(text: token);
     _clientId = TextEditingController(text: c?.oauthClientId ?? '');
     _scope = TextEditingController(text: c?.oauthScope ?? '');
-    _headers = [for (final e in extra.entries) _HeaderRow(e.key, e.value)];
+    _headers = [
+      for (final e in extra.entries)
+        _HeaderRow(e.key, e.value, e.value == maskedHeaderValue),
+    ];
     _initial = _snapshot();
   }
 
@@ -169,7 +183,9 @@ class _ServerDialogState extends ConsumerState<ServerDialog> {
   Map<String, String> _headerMap() => {
     for (final h in _headers)
       if (h.name.text.trim().isNotEmpty)
-        h.name.text.trim(): h.value.text.trim(),
+        h.name.text.trim(): h.stored && h.value.text.trim().isEmpty
+            ? maskedHeaderValue
+            : h.value.text.trim(),
   };
 
   /// The configuration described by the form right now.
@@ -177,6 +193,9 @@ class _ServerDialogState extends ConsumerState<ServerDialog> {
     final headers = _headerMap();
     if (_auth == _Auth.bearer && _token.text.trim().isNotEmpty) {
       headers['Authorization'] = 'Bearer ${_token.text.trim()}';
+    } else if (_auth == _Auth.bearer && _tokenStored) {
+      // Left empty: keep the token the server holds.
+      headers['Authorization'] = maskedHeaderValue;
     }
     final oauth = _auth == _Auth.oauth;
     final clientId = _clientId.text.trim();
@@ -225,18 +244,31 @@ class _ServerDialogState extends ConsumerState<ServerDialog> {
     final draft = _draft();
     final existing = widget.existing;
     // Do not await the connection: the card shows its live status.
+    final messenger = ScaffoldMessenger.of(context);
+    Future<void> run(Future<Object?> Function() change) async {
+      try {
+        await change();
+      } on ServerException catch (e) {
+        messenger
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(content: Text(e.message)));
+      }
+    }
+
     if (existing == null) {
-      hub.addServer(
-        name: draft.name,
-        url: draft.url,
-        headers: draft.headers,
-        oauth: draft.oauth,
-        oauthClientId: draft.oauthClientId,
-        oauthScope: draft.oauthScope,
-        transport: draft.transport,
+      run(
+        () => hub.addServer(
+          name: draft.name,
+          url: draft.url,
+          headers: draft.headers,
+          oauth: draft.oauth,
+          oauthClientId: draft.oauthClientId,
+          oauthScope: draft.oauthScope,
+          transport: draft.transport,
+        ),
       );
     } else {
-      hub.updateServer(draft);
+      run(() => hub.updateServer(draft));
     }
     Navigator.pop(context);
   }
@@ -263,8 +295,14 @@ class _ServerDialogState extends ConsumerState<ServerDialog> {
       ),
     );
     if (ok == true && mounted) {
-      ref.read(mcpHubProvider.notifier).removeServer(existing.id);
+      final hub = ref.read(mcpHubProvider.notifier);
+      final messenger = ScaffoldMessenger.of(context);
       Navigator.pop(context);
+      try {
+        await hub.removeServer(existing.id);
+      } on ServerException catch (e) {
+        messenger.showSnackBar(SnackBar(content: Text(e.message)));
+      }
     }
   }
 
@@ -462,7 +500,9 @@ class _ServerDialogState extends ConsumerState<ServerDialog> {
         enableSuggestions: false,
         decoration: InputDecoration(
           labelText: 'Bearer token',
-          helperText: 'Stored in this browser only.',
+          helperText: _tokenStored
+              ? 'A token is stored on the server. Leave empty to keep it.'
+              : 'Sent to the server, which keeps it. It is never shown again.',
           suffixIcon: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -490,7 +530,8 @@ class _ServerDialogState extends ConsumerState<ServerDialog> {
             ],
           ),
         ),
-        validator: (v) => _auth == _Auth.bearer && (v ?? '').trim().isEmpty
+        validator: (v) =>
+            _auth == _Auth.bearer && (v ?? '').trim().isEmpty && !_tokenStored
             ? 'Enter a token, or choose None'
             : null,
       ),
@@ -561,7 +602,11 @@ class _ServerDialogState extends ConsumerState<ServerDialog> {
               flex: 3,
               child: TextFormField(
                 controller: _headers[i].value,
-                decoration: const InputDecoration(hintText: 'Value'),
+                decoration: InputDecoration(
+                  hintText: _headers[i].stored
+                      ? 'Stored on the server (leave empty to keep)'
+                      : 'Value',
+                ),
               ),
             ),
             IconButton(
@@ -801,31 +846,28 @@ class OAuthInfo extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Redirect URI for this app', style: theme.textTheme.titleSmall),
+          Text(
+            'Redirect URI for this gateway',
+            style: theme.textTheme.titleSmall,
+          ),
           const SizedBox(height: 6),
           CodeBlock(redirectUri.toString(), maxHeight: 70),
           const SizedBox(height: 8),
           Text(
-            'Allow this exact URI in the server\'s OAuth / authorization '
-            'provider. Servers set up only for ChatGPT '
+            'The gateway signs in to the server for everyone who uses it. Allow '
+            'this exact URI in the server\'s OAuth / authorization provider. '
+            'Servers set up only for ChatGPT '
             '(https://chatgpt.com/connector/oauth/*) or another client\'s '
-            'callback will reject this app until it is added, or until you '
-            'enter a pre-registered Client ID that already allows it.',
-            style: muted,
-          ),
-          const SizedBox(height: 6),
-          Text(
-            'The authorization server must also allow CORS from '
-            '${redirectUri.scheme}://${redirectUri.authority} on its metadata, '
-            'registration and token endpoints.',
+            'callback will reject it until it is added, or until you enter a '
+            'pre-registered Client ID that already allows it.',
             style: muted,
           ),
           if (insecure) ...[
             const SizedBox(height: 6),
             Text(
-              'This page is served over plain http from a non-local address. '
+              'The gateway is reached over plain http from a non-local address. '
               'Many providers only accept https or localhost redirect URIs: '
-              'open the app via localhost or serve it over https.',
+              'put the gateway behind https (see its README).',
               style: muted?.copyWith(color: StatusColors.warn),
             ),
           ],

@@ -1,15 +1,20 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../core/ids.dart';
 import '../core/prefs.dart';
+import '../server/server_client.dart';
+import '../server/server_events.dart';
+import '../server/session.dart';
 import 'llm_types.dart';
 import 'ollama_provider.dart';
 import 'openai_provider.dart';
 import 'provider_config.dart';
 
-const _storageKey = 'mcpm.llm.v1';
+const _activeKey = 'mcpm.llm.active.v1';
 
-/// Gemma 4 on Ollama is the default; any other model name can be typed in.
+/// Gemma 4 on Ollama is the suggested default; any other model name can be
+/// typed in.
 const defaultOllamaModel = 'gemma4';
 const defaultOllamaUrl = 'http://localhost:11434';
 
@@ -34,108 +39,183 @@ class LlmSettings {
   bool get isReady => activeProvider != null && (activeModel ?? '').isNotEmpty;
 }
 
-/// Overridden in tests to return a fake provider.
+/// Builds the client for a provider. The dashboard never holds a provider's
+/// key: the client talks to the server's proxy for that provider (signed in
+/// with the session), and the server adds the key. Overridden in tests to
+/// return a fake provider.
 final llmProviderFactoryProvider =
-    Provider<LlmProvider Function(ProviderConfig)>(
-      (ref) =>
-          (config) => switch (config.kind) {
-            ProviderKind.ollama => OllamaLlmProvider(config),
-            ProviderKind.openaiCompatible => OpenAiLlmProvider(config),
-          },
-    );
+    Provider<LlmProvider Function(ProviderConfig)>((ref) {
+      final session = ref.watch(sessionProvider);
+      return (config) {
+        final proxied = config.copyWith(
+          baseUrl: '${session.serverUrl}/api/llm/providers/${config.id}/proxy',
+          apiKey: session.token,
+        );
+        return switch (config.kind) {
+          ProviderKind.ollama => OllamaLlmProvider(proxied),
+          ProviderKind.openaiCompatible => OpenAiLlmProvider(proxied),
+        };
+      };
+    });
 
 final llmSettingsProvider = NotifierProvider<LlmSettingsNotifier, LlmSettings>(
   LlmSettingsNotifier.new,
 );
 
+/// The model providers, kept on the server (with their keys). Which provider
+/// and model this browser chats with is a local preference.
 class LlmSettingsNotifier extends Notifier<LlmSettings> {
+  ServerClient? _client;
+  Completer<void>? _loaded;
+
+  /// Completes when the first load has finished.
+  Future<void> get loaded => (_loaded ??= Completer<void>()).future;
+
   @override
   LlmSettings build() {
-    final raw = readJson(ref.read(sharedPreferencesProvider), _storageKey);
-    if (raw is Map) {
-      try {
-        final providers = [
-          for (final p in (raw['providers'] as List))
-            ProviderConfig.fromJson((p as Map).cast<String, dynamic>()),
-        ];
-        return LlmSettings(
-          providers: providers,
-          activeProviderId: raw['activeProviderId'] as String?,
-          activeModel: raw['activeModel'] as String?,
-        );
-      } catch (_) {
-        // Fall through to defaults.
+    _client = ref.watch(serverClientProvider);
+    _loaded = Completer<void>();
+    listenToServer(ref, (e) {
+      if (e.type == 'ready' ||
+          (e.type == 'changed' &&
+              ((e.data['collections'] as List?) ?? const []).contains(
+                'llmProviders',
+              ))) {
+        unawaited(reload());
       }
+    });
+    if (_client != null) {
+      Future.microtask(() async {
+        await reload();
+        if (ref.mounted && !(_loaded?.isCompleted ?? true)) {
+          _loaded!.complete();
+        }
+      });
+    } else {
+      _loaded!.complete();
     }
-    final provider = ProviderConfig(
-      id: newId('llm'),
-      name: 'Ollama',
-      kind: ProviderKind.ollama,
-      baseUrl: ref.read(appEnvProvider).ollamaUrl ?? defaultOllamaUrl,
-      models: const [defaultOllamaModel],
-    );
+    final active = readJson(ref.read(sharedPreferencesProvider), _activeKey);
     return LlmSettings(
-      providers: [provider],
-      activeProviderId: provider.id,
-      activeModel: defaultOllamaModel,
+      providers: const [],
+      activeProviderId: active is Map ? active['providerId'] as String? : null,
+      activeModel: active is Map ? active['model'] as String? : null,
     );
   }
 
-  void upsert(ProviderConfig config) {
+  /// Loads the providers from the server.
+  Future<void> reload() async {
+    final client = _client;
+    if (client == null) return;
+    try {
+      final list = await client.getList('/api/llm/providers');
+      if (!ref.mounted) return;
+      _setProviders([for (final j in list) ProviderConfig.fromServer(j)]);
+    } on ServerException {
+      // Keep what is shown.
+    }
+  }
+
+  void _setProviders(List<ProviderConfig> providers) {
+    var activeId = state.activeProviderId;
+    var model = state.activeModel;
+    if (!providers.any((p) => p.id == activeId)) {
+      final first = providers.firstOrNull;
+      activeId = first?.id;
+      model = first?.models.firstOrNull;
+    }
+    state = LlmSettings(
+      providers: providers,
+      activeProviderId: activeId,
+      activeModel: model,
+    );
+    _saveActive();
+  }
+
+  /// Adds [config] or replaces the provider with the same id. A key typed in
+  /// [ProviderConfig.apiKey] replaces the stored one; [clearKey] removes it.
+  /// Throws [ServerException] if the server refuses it (the list is then
+  /// restored).
+  Future<void> upsert(ProviderConfig config, {bool clearKey = false}) async {
     final exists = state.providers.any((p) => p.id == config.id);
+    final shown = config.copyWith(
+      hasKey: clearKey
+          ? false
+          : (config.apiKey ?? '').isNotEmpty || config.hasKey,
+      clearApiKey: true,
+    );
     final providers = exists
-        ? [for (final p in state.providers) p.id == config.id ? config : p]
-        : [...state.providers, config];
+        ? [for (final p in state.providers) p.id == config.id ? shown : p]
+        : [...state.providers, shown];
     final activeId = state.activeProviderId ?? config.id;
     var activeModel = state.activeModel;
     if (activeId == config.id && !config.models.contains(activeModel)) {
       activeModel = config.models.firstOrNull;
     }
-    _set(
-      LlmSettings(
-        providers: providers,
-        activeProviderId: activeId,
-        activeModel: activeModel,
-      ),
+    state = LlmSettings(
+      providers: providers,
+      activeProviderId: activeId,
+      activeModel: activeModel,
     );
+    _saveActive();
+    final client = _client;
+    if (client == null) return;
+    try {
+      final saved = await client.putMap(
+        '/api/llm/providers/${config.id}',
+        config.toServerJson(clearKey: clearKey),
+      );
+      if (!ref.mounted) return;
+      final fresh = ProviderConfig.fromServer(saved);
+      state = LlmSettings(
+        providers: [
+          for (final p in state.providers) p.id == fresh.id ? fresh : p,
+        ],
+        activeProviderId: state.activeProviderId,
+        activeModel: state.activeModel,
+      );
+    } on ServerException {
+      await reload();
+      rethrow;
+    }
   }
 
-  void remove(String id) {
+  Future<void> remove(String id) async {
     final providers = [
       for (final p in state.providers)
         if (p.id != id) p,
     ];
     final removedActive = state.activeProviderId == id;
     final next = removedActive && providers.isNotEmpty ? providers.first : null;
-    _set(
-      LlmSettings(
-        providers: providers,
-        activeProviderId: removedActive ? next?.id : state.activeProviderId,
-        activeModel: removedActive
-            ? (next != null && next.models.isNotEmpty
-                  ? next.models.first
-                  : null)
-            : state.activeModel,
-      ),
+    state = LlmSettings(
+      providers: providers,
+      activeProviderId: removedActive ? next?.id : state.activeProviderId,
+      activeModel: removedActive
+          ? (next != null && next.models.isNotEmpty ? next.models.first : null)
+          : state.activeModel,
     );
+    _saveActive();
+    final client = _client;
+    if (client == null) return;
+    try {
+      await client.delete('/api/llm/providers/$id');
+    } on ServerException {
+      await reload();
+      rethrow;
+    }
   }
 
   void setActive(String providerId, String model) {
-    _set(
-      LlmSettings(
-        providers: state.providers,
-        activeProviderId: providerId,
-        activeModel: model,
-      ),
+    state = LlmSettings(
+      providers: state.providers,
+      activeProviderId: providerId,
+      activeModel: model,
     );
+    _saveActive();
   }
 
-  void _set(LlmSettings next) {
-    state = next;
-    writeJson(ref.read(sharedPreferencesProvider), _storageKey, {
-      'providers': [for (final p in next.providers) p.toJson()],
-      'activeProviderId': next.activeProviderId,
-      'activeModel': next.activeModel,
-    });
-  }
+  void _saveActive() => writeJson(
+    ref.read(sharedPreferencesProvider),
+    _activeKey,
+    {'providerId': state.activeProviderId, 'model': state.activeModel},
+  );
 }
