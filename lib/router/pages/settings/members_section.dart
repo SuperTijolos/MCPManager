@@ -72,63 +72,63 @@ class MembersSection extends ConsumerWidget {
           )
         else
           for (final m in data.members)
-            Card(
-              child: ListTile(
-                key: ValueKey('member-${m.id}'),
-                leading: CircleAvatar(
-                  backgroundImage: m.avatarUrl == null
-                      ? null
-                      : NetworkImage(m.avatarUrl!),
-                  child: m.avatarUrl == null
-                      ? Text(m.label.characters.first.toUpperCase())
-                      : null,
-                ),
-                title: Text('${m.label}${m.id == me ? ' (you)' : ''}'),
-                subtitle: Text(
-                  [
-                    m.email ?? m.login,
-                    scopeSummary(
-                      m.serverIds,
-                      m.portalIds,
-                      options.servers,
-                      options.portals,
-                    ),
-                    m.lastSeenAt == null
-                        ? 'never seen'
-                        : 'seen ${formatAgo(m.lastSeenAt!)}',
-                  ].join(' · '),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Chip(
-                      key: ValueKey('role-${m.id}'),
-                      label: Text(data.roleName(m.role)),
-                    ),
-                    if (canManage && m.id != me) ...[
-                      IconButton(
-                        key: ValueKey('edit-member-${m.id}'),
-                        tooltip: 'Change role and access',
-                        icon: const Icon(Icons.edit_outlined, size: 20),
-                        onPressed: () => showMemberDialog(context, m),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Card(
+                child: ListTile(
+                  key: ValueKey('member-${m.id}'),
+                  leading: CircleAvatar(
+                    backgroundImage: m.avatarUrl == null
+                        ? null
+                        : NetworkImage(m.avatarUrl!),
+                    child: m.avatarUrl == null
+                        ? Text(m.label.characters.first.toUpperCase())
+                        : null,
+                  ),
+                  title: Text('${m.label}${m.id == me ? ' (you)' : ''}'),
+                  subtitle: Text(
+                    [
+                      m.email ?? m.login,
+                      scopeSummary(
+                        m.serverIds,
+                        m.portalIds,
+                        options.servers,
+                        options.portals,
                       ),
-                      IconButton(
-                        key: ValueKey('remove-member-${m.id}'),
-                        tooltip: 'Remove',
-                        icon: const Icon(
-                          Icons.person_remove_outlined,
-                          size: 20,
+                      m.lastSeenAt == null
+                          ? 'never seen'
+                          : 'seen ${formatAgo(m.lastSeenAt!)}',
+                    ].join(' · '),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Tag(data.roleName(m.role), key: ValueKey('role-${m.id}')),
+                      if (canManage && m.id != me) ...[
+                        IconButton(
+                          key: ValueKey('edit-member-${m.id}'),
+                          tooltip: 'Change role and access',
+                          icon: const Icon(Icons.edit_outlined, size: 20),
+                          onPressed: () => showMemberDialog(context, m),
                         ),
-                        onPressed: () => _confirmRemove(context, ref, m),
-                      ),
+                        IconButton(
+                          key: ValueKey('remove-member-${m.id}'),
+                          tooltip: 'Remove',
+                          icon: const Icon(
+                            Icons.person_remove_outlined,
+                            size: 20,
+                          ),
+                          onPressed: () => _confirmRemove(context, ref, m),
+                        ),
+                      ],
                     ],
-                  ],
+                  ),
                 ),
               ),
             ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 24),
         Text('Invitations', style: theme.textTheme.titleMedium),
         const SizedBox(height: 4),
         Text(
@@ -143,27 +143,30 @@ class MembersSection extends ConsumerWidget {
           Text('No pending invitations.', style: muted)
         else
           for (final i in pending)
-            Card(
-              child: ListTile(
-                key: ValueKey('invite-${i.id}'),
-                leading: const Icon(Icons.mail_outline),
-                title: Text(i.email ?? 'Anyone with the link'),
-                subtitle: Text(
-                  '${data.roleName(i.role)} · by ${i.createdBy} · '
-                  'expires ${formatDateTime(i.expiresAt)}',
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Card(
+                child: ListTile(
+                  key: ValueKey('invite-${i.id}'),
+                  leading: const Icon(Icons.mail_outline),
+                  title: Text(i.email ?? 'Anyone with the link'),
+                  subtitle: Text(
+                    '${data.roleName(i.role)} · by ${i.createdBy} · '
+                    'expires ${formatDateTime(i.expiresAt)}',
+                  ),
+                  trailing: canManage
+                      ? TextButton(
+                          key: ValueKey('revoke-${i.id}'),
+                          onPressed: () => serverAction(
+                            context,
+                            () => ref
+                                .read(accessControlProvider.notifier)
+                                .revokeInvite(i.id),
+                          ),
+                          child: const Text('Revoke'),
+                        )
+                      : null,
                 ),
-                trailing: canManage
-                    ? TextButton(
-                        key: ValueKey('revoke-${i.id}'),
-                        onPressed: () => serverAction(
-                          context,
-                          () => ref
-                              .read(accessControlProvider.notifier)
-                              .revokeInvite(i.id),
-                        ),
-                        child: const Text('Revoke'),
-                      )
-                    : null,
               ),
             ),
       ],

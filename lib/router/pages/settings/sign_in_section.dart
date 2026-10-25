@@ -6,8 +6,10 @@ import '../../../engine/server/access.dart';
 import '../../../engine/server/access_control.dart';
 import '../../../engine/server/auth_providers.dart';
 import '../../../engine/server/server_client.dart';
+import '../../../engine/server/session.dart';
 import '../../../ui/theme.dart';
 import '../../../ui/widgets.dart';
+import 'access_widgets.dart';
 
 /// The ways people can sign in to this server (GitHub, Google), and who each
 /// lets in. Client secrets go to the server and are never shown again.
@@ -70,7 +72,13 @@ class SignInSection extends ConsumerWidget {
                       'so people can sign in as themselves.',
                 )
               : Column(
-                  children: [for (final p in list) _ProviderCard(provider: p)],
+                  children: [
+                    for (final p in list)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: _ProviderCard(provider: p),
+                      ),
+                  ],
                 ),
         ),
       ],
@@ -121,7 +129,7 @@ class _ProviderCard extends ConsumerWidget {
                 if (p.fromEnvironment)
                   const Padding(
                     padding: EdgeInsets.only(right: 8),
-                    child: Chip(label: Text('Set by the server')),
+                    child: Tag('Set by the server'),
                   ),
                 Switch(
                   key: ValueKey('enabled-${p.id}'),
@@ -296,6 +304,7 @@ class _AuthProviderDialogState extends ConsumerState<AuthProviderDialog> {
       if (existing == null) {
         await store.create(
           kind: widget.kind,
+          id: _id,
           name: _name.text.trim(),
           clientId: _clientId.text.trim(),
           secret: _secret.text.trim(),
@@ -355,24 +364,57 @@ class _AuthProviderDialogState extends ConsumerState<AuthProviderDialog> {
     return list;
   }
 
+  /// What the server would call this provider: its id is the address segment.
+  String get _id =>
+      widget.existing?.id ??
+      (() {
+        final slug = _name.text
+            .toLowerCase()
+            .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
+            .replaceAll(RegExp(r'^-+|-+$'), '');
+        return slug.isEmpty ? widget.kind : slug;
+      })();
+
+  Widget _heading(ThemeData theme, String title, [String? hint]) => Padding(
+    padding: const EdgeInsets.only(top: 24, bottom: 12),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title, style: theme.textTheme.titleSmall),
+        if (hint != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(
+              hint,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+      ],
+    ),
+  );
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final existing = widget.existing;
     final github = widget.kind == 'github';
+    final provider = github ? 'GitHub' : 'Google';
     final muted = theme.textTheme.bodySmall?.copyWith(
       color: theme.colorScheme.onSurfaceVariant,
     );
-    final callback = existing?.callbackUrl ?? '';
+    final server = ref.watch(sessionProvider.select((s) => s.serverUrl)) ?? '';
+    final callback = existing?.callbackUrl.isNotEmpty == true
+        ? existing!.callbackUrl
+        : '$server/auth/$_id/callback';
 
     return AlertDialog(
       title: Text(
-        existing == null
-            ? 'Add ${github ? 'GitHub' : 'Google'} sign-in'
-            : 'Edit ${existing.name}',
+        existing == null ? 'Add $provider sign-in' : 'Edit ${existing.name}',
       ),
       content: SizedBox(
-        width: 460,
+        width: 480,
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -380,19 +422,41 @@ class _AuthProviderDialogState extends ConsumerState<AuthProviderDialog> {
             children: [
               Text(
                 github
-                    ? 'Create an OAuth app under GitHub → Settings → Developer '
-                          'settings, and set its callback URL to this server\'s '
-                          '/auth/<id>/callback.'
-                    : 'Create an OAuth client (web application) in the Google '
-                          'Cloud console, and add this server\'s '
-                          '/auth/<id>/callback as an authorised redirect URI.',
+                    ? 'In GitHub, open Settings → Developer settings → OAuth '
+                          'Apps and create an app with this callback URL, then '
+                          'paste its client id and secret below.'
+                    : 'In the Google Cloud console, create an OAuth client '
+                          '(web application) with this authorised redirect '
+                          'URI, then paste its client id and secret below.',
                 style: muted,
               ),
-              if (callback.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Row(
+              const SizedBox(height: 12),
+              Container(
+                key: const ValueKey('provider-callback'),
+                padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.surfaceContainerHighest.withValues(
+                    alpha: 0.4,
+                  ),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: theme.colorScheme.outlineVariant),
+                ),
+                child: Row(
                   children: [
-                    Expanded(child: SelectableText(callback, style: muted)),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Callback URL', style: muted),
+                          SelectableText(
+                            callback,
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              fontFamily: 'monospace',
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                     IconButton(
                       tooltip: 'Copy callback URL',
                       icon: const Icon(Icons.copy_rounded, size: 18),
@@ -401,18 +465,24 @@ class _AuthProviderDialogState extends ConsumerState<AuthProviderDialog> {
                     ),
                   ],
                 ),
-              ],
-              const SizedBox(height: 12),
+              ),
+              _heading(theme, 'Credentials'),
               TextField(
                 key: const ValueKey('provider-name'),
                 controller: _name,
-                decoration: const InputDecoration(labelText: 'Name'),
+                onChanged: (_) => setState(() {}),
+                decoration: const InputDecoration(
+                  labelText: 'Name',
+                  helperText: 'Shown on the sign-in button.',
+                ),
               ),
+              const SizedBox(height: 16),
               TextField(
                 key: const ValueKey('provider-client-id'),
                 controller: _clientId,
                 decoration: const InputDecoration(labelText: 'Client id'),
               ),
+              const SizedBox(height: 16),
               TextField(
                 key: const ValueKey('provider-client-secret'),
                 controller: _secret,
@@ -424,12 +494,11 @@ class _AuthProviderDialogState extends ConsumerState<AuthProviderDialog> {
                       : 'Stored on the server and never shown again.',
                 ),
               ),
-              const SizedBox(height: 16),
-              Text('Who is let in', style: theme.textTheme.titleSmall),
-              Text(
-                'Separate entries with commas. Emails count only when the '
-                'provider has verified them.',
-                style: muted,
+              _heading(
+                theme,
+                'Who is let in',
+                'Anyone who matches one entry. Separate entries with commas. '
+                    'Emails count only when $provider has verified them.',
               ),
               if (github) ...[
                 TextField(
@@ -437,13 +506,19 @@ class _AuthProviderDialogState extends ConsumerState<AuthProviderDialog> {
                   controller: _orgs,
                   decoration: const InputDecoration(
                     labelText: 'GitHub organisations',
+                    hintText: 'acme, other-org',
                   ),
                 ),
+                const SizedBox(height: 16),
                 TextField(
                   key: const ValueKey('provider-users'),
                   controller: _users,
-                  decoration: const InputDecoration(labelText: 'GitHub logins'),
+                  decoration: const InputDecoration(
+                    labelText: 'GitHub logins',
+                    hintText: 'octocat',
+                  ),
                 ),
+                const SizedBox(height: 16),
               ],
               TextField(
                 key: const ValueKey('provider-domains'),
@@ -453,6 +528,7 @@ class _AuthProviderDialogState extends ConsumerState<AuthProviderDialog> {
                   hintText: 'example.com',
                 ),
               ),
+              const SizedBox(height: 16),
               TextField(
                 key: const ValueKey('provider-emails'),
                 controller: _emails,
@@ -461,15 +537,14 @@ class _AuthProviderDialogState extends ConsumerState<AuthProviderDialog> {
                   hintText: 'ann@example.com',
                 ),
               ),
-              const SizedBox(height: 12),
+              _heading(theme, 'Role'),
               DropdownButtonFormField<String>(
                 key: const ValueKey('provider-default-role'),
                 initialValue: _defaultRole,
+                isExpanded: true,
                 decoration: const InputDecoration(
-                  labelText: 'Role for people on this list',
-                  helperText:
-                      'What they may do when they first sign in. Change it '
-                      'for one person under Members.',
+                  labelText: 'New members start as',
+                  helperText: 'Change it for one person under Members.',
                 ),
                 items: [
                   for (final r in _roleChoices(ref))
@@ -478,7 +553,7 @@ class _AuthProviderDialogState extends ConsumerState<AuthProviderDialog> {
                 onChanged: (v) => setState(() => _defaultRole = v ?? 'viewer'),
               ),
               if (_error != null) ...[
-                const SizedBox(height: 12),
+                const SizedBox(height: 16),
                 Text(
                   _error!,
                   key: const ValueKey('provider-error'),

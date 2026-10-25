@@ -116,3 +116,95 @@ String scopeSummary(
   return '${part(servers, serverNames, 'servers')} · '
       '${part(portals, portalNames, 'portals')}';
 }
+
+/// A small label, for things like "Built in".
+class Tag extends StatelessWidget {
+  const Tag(this.text, {super.key});
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.6),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        text,
+        style: theme.textTheme.labelSmall?.copyWith(
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
+      ),
+    );
+  }
+}
+
+/// What a role allows, one line per area: `MCP servers   view  manage`.
+class PermissionSummary extends StatelessWidget {
+  const PermissionSummary({
+    super.key,
+    required this.permissions,
+    required this.have,
+  });
+
+  final List<PermissionInfo> permissions;
+  final Set<String> have;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final groups = <String, List<PermissionInfo>>{};
+    for (final p in permissions) {
+      if (have.contains(p.id)) (groups[p.group] ??= []).add(p);
+    }
+    if (groups.isEmpty) {
+      return Text(
+        'No permissions',
+        style: theme.textTheme.bodySmall?.copyWith(
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (final g in groups.entries)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: 110,
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      g.key,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: Wrap(
+                    spacing: 6,
+                    runSpacing: 4,
+                    children: [
+                      for (final p in g.value)
+                        Tooltip(
+                          message: p.label,
+                          child: Tag(p.id.substring(p.id.indexOf('.') + 1)),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}

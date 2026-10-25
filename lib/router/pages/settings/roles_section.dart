@@ -6,6 +6,7 @@ import '../../../engine/server/access_control.dart';
 import '../../../engine/server/server_client.dart';
 import '../../../ui/theme.dart';
 import '../../../ui/widgets.dart';
+import 'access_widgets.dart';
 
 /// Roles: named sets of permissions. The built-in ones are fixed; make your
 /// own for anything in between.
@@ -52,73 +53,63 @@ class RolesSection extends ConsumerWidget {
           )
         else
           for (final r in data.roles)
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            r.name,
-                            style: theme.textTheme.titleSmall,
-                          ),
-                        ),
-                        if (r.builtin) const Chip(label: Text('Built in')),
-                      ],
-                    ),
-                    if (r.description.isNotEmpty)
-                      Text(r.description, style: muted),
-                    const SizedBox(height: 4),
-                    Text(
-                      '${r.permissions.length} permissions · '
-                      '${r.members} members'
-                      '${r.invites > 0 ? ' · ${r.invites} pending invitations' : ''}',
-                      style: muted,
-                    ),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 6,
-                      runSpacing: 4,
-                      children: [
-                        for (final p in data.permissions)
-                          if (r.permissions.contains(p.id))
-                            Chip(
-                              label: Text(
-                                p.id,
-                                style: theme.textTheme.labelSmall,
-                              ),
-                              visualDensity: VisualDensity.compact,
-                            ),
-                      ],
-                    ),
-                    if (canEdit && !r.builtin) ...[
-                      const SizedBox(height: 8),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                       Row(
                         children: [
-                          OutlinedButton(
-                            key: ValueKey('edit-role-${r.id}'),
-                            onPressed: () =>
-                                showRoleDialog(context, existing: r),
-                            child: const Text('Edit'),
-                          ),
-                          const SizedBox(width: 8),
-                          TextButton(
-                            key: ValueKey('delete-role-${r.id}'),
-                            onPressed: () => serverAction(
-                              context,
-                              () => ref
-                                  .read(accessControlProvider.notifier)
-                                  .deleteRole(r.id),
+                          Text(r.name, style: theme.textTheme.titleSmall),
+                          if (r.builtin) ...[
+                            const SizedBox(width: 8),
+                            const Tag('Built in'),
+                          ],
+                          const Spacer(),
+                          if (canEdit && !r.builtin) ...[
+                            OutlinedButton(
+                              key: ValueKey('edit-role-${r.id}'),
+                              onPressed: () =>
+                                  showRoleDialog(context, existing: r),
+                              child: const Text('Edit'),
                             ),
-                            child: const Text('Delete'),
-                          ),
+                            const SizedBox(width: 8),
+                            TextButton(
+                              key: ValueKey('delete-role-${r.id}'),
+                              onPressed: () => serverAction(
+                                context,
+                                () => ref
+                                    .read(accessControlProvider.notifier)
+                                    .deleteRole(r.id),
+                              ),
+                              child: const Text('Delete'),
+                            ),
+                          ],
                         ],
                       ),
+                      if (r.description.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2),
+                          child: Text(r.description, style: muted),
+                        ),
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(
+                          '${r.members} ${r.members == 1 ? 'member' : 'members'}'
+                          '${r.invites > 0 ? ' · ${r.invites} pending ${r.invites == 1 ? 'invitation' : 'invitations'}' : ''}',
+                          style: muted,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      PermissionSummary(
+                        permissions: data.permissions,
+                        have: r.permissions,
+                      ),
                     ],
-                  ],
+                  ),
                 ),
               ),
             ),
@@ -210,15 +201,22 @@ class _RoleDialogState extends ConsumerState<_RoleDialog> {
                 controller: _name,
                 decoration: const InputDecoration(labelText: 'Name'),
               ),
+              const SizedBox(height: 16),
               TextField(
                 key: const ValueKey('role-description'),
                 controller: _description,
                 decoration: const InputDecoration(labelText: 'Description'),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 24),
               Text('Permissions', style: theme.textTheme.titleSmall),
+              Text(
+                'You can only give permissions you have yourself.',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
               for (final g in groups.entries) ...[
-                const SizedBox(height: 8),
+                const Divider(height: 24),
                 Text(g.key, style: theme.textTheme.labelLarge),
                 for (final p in g.value)
                   CheckboxListTile(
@@ -240,7 +238,7 @@ class _RoleDialogState extends ConsumerState<_RoleDialog> {
                   ),
               ],
               if (_error != null) ...[
-                const SizedBox(height: 12),
+                const SizedBox(height: 16),
                 Text(
                   _error!,
                   key: const ValueKey('role-error'),
