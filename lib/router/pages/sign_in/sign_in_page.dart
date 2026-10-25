@@ -28,18 +28,28 @@ class _SignInPageState extends ConsumerState<SignInPage> {
   String? _error;
   ServerSignIn? _options;
 
+  /// The address is the one this dashboard is set up for (`PORTAL_URL`, or
+  /// where it is served from), so there is nothing to ask.
+  bool _configured = false;
+
+  /// The server answered when asked what it offers.
+  bool _reachable = false;
+
+  /// The person asked to use another server.
+  bool _changing = false;
+
   @override
   void initState() {
     super.initState();
     final session = ref.read(sessionProvider);
     final env = ref.read(appEnvProvider);
+    final intended = env.portalUrl ?? ref.read(sameOriginServerProvider);
     _url = TextEditingController(
-      text:
-          session.serverUrl ??
-          env.portalUrl ??
-          ref.read(sameOriginServerProvider) ??
-          'http://localhost:8787',
+      text: session.serverUrl ?? intended ?? 'http://localhost:8787',
     );
+    _configured =
+        intended != null &&
+        normalizeServerUrl(_url.text) == normalizeServerUrl(intended);
     // Find out what this server offers, so the buttons are the right ones.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && session.status != SessionStatus.checking) _inspect();
@@ -91,9 +101,19 @@ class _SignInPageState extends ConsumerState<SignInPage> {
     if (url.isEmpty) return;
     try {
       final options = await ref.read(sessionProvider.notifier).inspect(url);
-      if (mounted) setState(() => _options = options);
+      if (mounted) {
+        setState(() {
+          _options = options;
+          _reachable = true;
+        });
+      }
     } on ServerException {
-      if (mounted) setState(() => _options = null);
+      if (mounted) {
+        setState(() {
+          _options = null;
+          _reachable = false;
+        });
+      }
     }
   }
 
@@ -143,16 +163,35 @@ class _SignInPageState extends ConsumerState<SignInPage> {
                       style: muted,
                     ),
                     const SizedBox(height: 20),
-                    TextField(
-                      key: const ValueKey('server-url'),
-                      controller: _url,
-                      keyboardType: TextInputType.url,
-                      decoration: const InputDecoration(
-                        labelText: 'Server address',
-                        hintText: 'https://mcp.example.com',
+                    if (_configured && _reachable && !_changing)
+                      Row(
+                        key: const ValueKey('server-fixed'),
+                        children: [
+                          Expanded(
+                            child: Text(
+                              'Server: ${_url.text}',
+                              style: muted,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          TextButton(
+                            key: const ValueKey('change-server'),
+                            onPressed: () => setState(() => _changing = true),
+                            child: const Text('Change'),
+                          ),
+                        ],
+                      )
+                    else
+                      TextField(
+                        key: const ValueKey('server-url'),
+                        controller: _url,
+                        keyboardType: TextInputType.url,
+                        decoration: const InputDecoration(
+                          labelText: 'Server address',
+                          hintText: 'https://mcp.example.com',
+                        ),
+                        onSubmitted: (_) => _inspect(),
                       ),
-                      onSubmitted: (_) => _inspect(),
-                    ),
                     if (error != null) ...[
                       const SizedBox(height: 12),
                       Text(

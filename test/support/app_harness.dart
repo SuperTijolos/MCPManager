@@ -68,7 +68,7 @@ Future<ProviderContainer> pumpApp(
         if (signedIn)
           ...signedInOverrides(gw, reach: reach)
         else ...[
-          serverHttpClientProvider.overrideWithValue(() => gw.client),
+          serverHttpClientProvider.overrideWithValue(() => reach ?? gw.client),
           serverEventsEnabledProvider.overrideWithValue(false),
         ],
         if (oauth != null)

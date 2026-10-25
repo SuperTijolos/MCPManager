@@ -1,6 +1,8 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mcp_manager/engine/core/prefs.dart';
 import 'package:mcp_manager/engine/server/session.dart';
@@ -82,23 +84,46 @@ void main() {
     );
   });
 
-  testWidgets('the address defaults to where the dashboard is served from', (
+  testWidgets('a configured address is not asked for', (tester) async {
+    await pumpApp(
+      tester,
+      signedIn: false,
+      overrides: [sameOriginServerProvider.overrideWithValue(gatewayUrl)],
+    );
+    expect(_key('server-fixed'), findsOneWidget);
+    expect(_key('server-url'), findsNothing);
+    expect(find.text('Server: $gatewayUrl'), findsOneWidget);
+    expect(_key('sign-in-github'), findsOneWidget);
+
+    // It can still be changed.
+    await tester.tap(_key('change-server'));
+    await tester.pumpAndSettle();
+    expect(_key('server-url'), findsOneWidget);
+    expect(
+      tester.widget<TextField>(_key('server-url')).controller!.text,
+      gatewayUrl,
+    );
+  });
+
+  testWidgets('a configured address that does not answer is shown', (
     tester,
   ) async {
     await pumpApp(
       tester,
       signedIn: false,
       overrides: [
-        sameOriginServerProvider.overrideWithValue('https://mcp.example.com'),
+        sameOriginServerProvider.overrideWithValue('https://down.example'),
       ],
+      reach: MockClient((_) async => throw http.ClientException('down')),
     );
+    expect(_key('server-fixed'), findsNothing);
     expect(
       tester.widget<TextField>(_key('server-url')).controller!.text,
-      'https://mcp.example.com',
+      'https://down.example',
     );
   });
 
-  testWidgets('a PORTAL_URL, then a saved address, win over that guess', (
+  testWidgets('a saved address that differs from the configured one wins', (
     tester,
   ) async {
     await pumpApp(
