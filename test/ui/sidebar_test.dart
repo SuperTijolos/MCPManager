@@ -26,7 +26,7 @@ void main() {
     expect(dividers, findsNWidgets(2));
     final brandIcon = find.descendant(
       of: railFinder,
-      matching: find.byIcon(Icons.hub_rounded),
+      matching: find.byKey(const ValueKey('brand-icon')),
     );
     final firstNavigationIcon = find.descendant(
       of: railFinder,

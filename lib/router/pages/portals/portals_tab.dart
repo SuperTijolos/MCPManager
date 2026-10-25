@@ -28,7 +28,7 @@ class PortalsTab extends ConsumerWidget {
 
     if (data.portals.isEmpty) {
       return EmptyState(
-        icon: Icons.hub_outlined,
+        icon: Icons.hub_rounded,
         title: 'No portals yet',
         message: data.servers.isEmpty
             ? 'Add some MCP servers first (the MCP Servers page), then group '

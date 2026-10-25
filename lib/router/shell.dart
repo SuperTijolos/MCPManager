@@ -236,7 +236,12 @@ class _Brand extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(Icons.hub_rounded, color: color, size: 28),
+        Icon(
+          Icons.hub_rounded,
+          key: const ValueKey('brand-icon'),
+          color: color,
+          size: 28,
+        ),
         if (extended) ...[
           const SizedBox(width: 10),
           const Text(

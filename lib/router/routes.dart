@@ -51,8 +51,8 @@ const mainDestinations = [
   AppDestination(
     '/mcp-portals',
     'MCP Portals',
-    Icons.hub_outlined,
-    Icons.hub,
+    Icons.hub_rounded,
+    Icons.hub_rounded,
     permission: 'portals.view',
   ),
   AppDestination(

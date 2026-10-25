@@ -437,7 +437,7 @@ class _WorkspaceBanner extends StatelessWidget {
                   ),
                   child: Icon(
                     noServers
-                        ? Icons.hub_outlined
+                        ? Icons.hub_rounded
                         : failed > 0
                         ? Icons.warning_amber_rounded
                         : allOnline

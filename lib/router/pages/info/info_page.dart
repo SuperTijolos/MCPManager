@@ -65,7 +65,7 @@ class InfoPage extends ConsumerWidget {
                   ),
                   tile(
                     _Feature(
-                      icon: Icons.hub_outlined,
+                      icon: Icons.hub_rounded,
                       title: 'MCP Portals',
                       route: '/mcp-portals',
                       body:
