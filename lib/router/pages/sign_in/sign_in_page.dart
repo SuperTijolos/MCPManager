@@ -8,6 +8,11 @@ import '../../../ui/theme.dart';
 
 /// Where someone signs in to a server, or waits while a saved session is
 /// checked.
+IconData _iconFor(String? kind) => switch (kind) {
+  'google' => Icons.g_mobiledata,
+  _ => Icons.login,
+};
+
 class SignInPage extends ConsumerStatefulWidget {
   const SignInPage({super.key});
 
@@ -40,14 +45,14 @@ class _SignInPageState extends ConsumerState<SignInPage> {
     super.dispose();
   }
 
-  Future<void> _github() async {
+  Future<void> _begin([String? providerId]) async {
     setState(() {
       _busy = true;
       _error = null;
     });
     final error = await ref
         .read(sessionProvider.notifier)
-        .beginGitHub(_url.text);
+        .beginSignIn(_url.text, providerId);
     if (mounted) {
       setState(() {
         _busy = false;
@@ -157,23 +162,42 @@ class _SignInPageState extends ConsumerState<SignInPage> {
                             : () => ref.read(sessionProvider.notifier).retry(),
                         child: const Text('Try again'),
                       )
+                    else if (_options != null && _options!.providers.length > 1)
+                      for (final p in _options!.providers) ...[
+                        FilledButton.icon(
+                          key: ValueKey('sign-in-${p.id}'),
+                          onPressed: _busy ? null : () => _begin(p.id),
+                          icon: Icon(_iconFor(p.kind), size: 18),
+                          label: Text('Sign in with ${p.name}'),
+                        ),
+                        const SizedBox(height: 8),
+                      ]
                     else
                       FilledButton.icon(
-                        key: const ValueKey('sign-in-github'),
-                        onPressed: _busy ? null : _github,
-                        icon: const Icon(Icons.login, size: 18),
-                        label: const Text('Sign in with GitHub'),
+                        key: ValueKey(
+                          'sign-in-${_options?.providers.firstOrNull?.id ?? 'github'}',
+                        ),
+                        onPressed: _busy ? null : _begin,
+                        icon: Icon(
+                          _iconFor(_options?.providers.firstOrNull?.kind),
+                          size: 18,
+                        ),
+                        label: Text(
+                          'Sign in with '
+                          '${_options?.providers.firstOrNull?.name ?? 'GitHub'}',
+                        ),
                       ),
-                    if (_options != null && !_options!.github)
+                    if (_options != null && !_options!.any)
                       Padding(
                         padding: const EdgeInsets.only(top: 8),
                         child: Text(
-                          'This server has no GitHub sign-in set up yet.',
+                          'This server has no sign-in set up yet. Use the '
+                          'admin token, then set one up under Settings.',
                           style: muted,
                         ),
                       ),
                     if (_options != null &&
-                        _options!.github &&
+                        _options!.providers.length == 1 &&
                         _options!.orgs.isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.only(top: 8),

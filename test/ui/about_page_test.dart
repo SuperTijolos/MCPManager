@@ -80,7 +80,7 @@ void main() {
       for (final feature in [
         'MCP Servers',
         'MCP Tools & rules',
-        'Portals',
+        'MCP Portals',
         'Chat',
         'Audit',
         'Settings',

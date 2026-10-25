@@ -16,7 +16,7 @@ final serverHttpClientProvider = Provider<http.Client Function()>(
   (ref) => http.Client.new,
 );
 
-/// Sends this window to another address (the server's GitHub sign-in).
+/// Sends this window to another address (the server's sign-in).
 /// Overridden in tests, where there is no browser to leave.
 final sessionNavigatorProvider = Provider<void Function(Uri url)>(
   (ref) => navigateTo,
@@ -34,7 +34,7 @@ class SessionIdentity {
     this.avatarUrl,
   });
 
-  /// `member` (signed in with GitHub) or `admin` (the admin token).
+  /// `member` (signed in with a provider) or `admin` (the admin token).
   final String kind;
   final String? id;
   final String? login;
@@ -58,11 +58,32 @@ class SessionIdentity {
   }
 }
 
+/// One way to sign in that a server offers.
+class SignInProvider {
+  const SignInProvider({
+    required this.id,
+    required this.kind,
+    required this.name,
+  });
+
+  final String id;
+
+  /// `github` or `google`.
+  final String kind;
+  final String name;
+}
+
 /// What a server offers for signing in.
 class ServerSignIn {
-  const ServerSignIn({required this.github, this.orgs = const []});
-  final bool github;
+  const ServerSignIn({this.providers = const [], this.orgs = const []});
+
+  final List<SignInProvider> providers;
+
+  /// Organisations the first GitHub sign-in lets in, when it lists any.
   final List<String> orgs;
+
+  bool get github => providers.any((p) => p.kind == 'github');
+  bool get any => providers.isNotEmpty;
 }
 
 class SessionState {
@@ -128,7 +149,15 @@ class SessionNotifier extends Notifier<SessionState> {
     try {
       final r = await client.getMap('/auth/config');
       return ServerSignIn(
-        github: r['github'] == true,
+        providers: [
+          for (final p in (r['providers'] as List?) ?? const [])
+            if (p is Map)
+              SignInProvider(
+                id: '${p['id']}',
+                kind: '${p['kind']}',
+                name: '${p['name']}',
+              ),
+        ],
         orgs: [for (final o in (r['orgs'] as List?) ?? const []) '$o'],
       );
     } finally {
@@ -164,23 +193,30 @@ class SessionNotifier extends Notifier<SessionState> {
     }
   }
 
-  /// Sends this window to the server's GitHub sign-in; it comes back here with
-  /// a session. Returns an error message when that cannot start.
-  Future<String?> beginGitHub(String url) async {
+  /// Sends this window to the server's sign-in through [providerId] (the
+  /// first provider when null); it comes back here with a session. Returns an
+  /// error message when that cannot start.
+  Future<String?> beginSignIn(String url, [String? providerId]) async {
     final address = normalizeServerUrl(url);
     if (address.isEmpty) return 'Enter the server address.';
+    String id;
     try {
       final options = await inspect(address);
-      if (!options.github) {
-        return 'This server has no GitHub sign-in set up. Use the admin token.';
+      if (!options.any) {
+        return 'This server has no sign-in set up. Use the admin token.';
       }
+      final match = options.providers.where(
+        (p) => providerId == null || p.id == providerId,
+      );
+      if (match.isEmpty) return 'This server does not offer that sign-in.';
+      id = match.first.id;
     } on ServerException catch (e) {
       return e.message;
     }
     // Remember the address so the way back knows where the server is.
     _save(address, null);
     final here = currentAppUri().replace(fragment: '', query: '');
-    final target = Uri.parse('$address/auth/github').replace(
+    final target = Uri.parse('$address/auth/$id').replace(
       queryParameters: {'return_to': here.toString().replaceAll('#', '')},
     );
     ref.read(sessionNavigatorProvider)(target);

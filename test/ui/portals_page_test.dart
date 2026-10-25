@@ -75,7 +75,7 @@ void main() {
       reach: reach,
       defaultProvider: reach == null,
     );
-    await goTo(tester, '/portals');
+    await goTo(tester, '/mcp-portals');
     return c;
   }
 
@@ -491,10 +491,10 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('the route is /portals', (tester) async {
+    testWidgets('the route is /mcp-portals', (tester) async {
       await open(tester);
       final router = GoRouter.of(tester.element(find.byType(Scaffold).first));
-      expect(router.routeInformationProvider.value.uri.path, '/portals');
+      expect(router.routeInformationProvider.value.uri.path, '/mcp-portals');
     });
   });
 }

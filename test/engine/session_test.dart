@@ -217,7 +217,7 @@ void main() {
         addTearDown(gw.client.close);
         final navigated = <Uri>[];
         final c = await start(navigated: navigated);
-        final error = await session(c).beginGitHub('gateway.test');
+        final error = await session(c).beginSignIn('gateway.test');
         expect(error, isNull);
         expect(
           navigated.single.toString(),
@@ -233,8 +233,8 @@ void main() {
       addTearDown(gw.client.close);
       final navigated = <Uri>[];
       final c = await start(navigated: navigated);
-      final error = await session(c).beginGitHub(gatewayUrl);
-      expect(error, contains('no GitHub sign-in'));
+      final error = await session(c).beginSignIn(gatewayUrl);
+      expect(error, contains('no sign-in set up'));
       expect(navigated, isEmpty);
     });
   });

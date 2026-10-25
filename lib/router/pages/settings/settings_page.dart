@@ -5,6 +5,7 @@ import '../../../ui/widgets.dart';
 import 'data_section.dart';
 import 'models_section.dart';
 import 'operator_section.dart';
+import 'sign_in_section.dart';
 
 enum _Section {
   models(
@@ -16,6 +17,11 @@ enum _Section {
     'Operator',
     Icons.smart_toy_outlined,
     'Limits, approvals and your instructions',
+  ),
+  signIn(
+    'Sign-in',
+    Icons.login,
+    'How people sign in to this server, and who is let in',
   ),
   data(
     'Account & data',
@@ -42,6 +48,7 @@ class _SettingsPageState extends State<SettingsPage> {
   Widget get _content => switch (_section) {
     _Section.models => const ModelsSection(),
     _Section.operator => const OperatorSection(),
+    _Section.signIn => const SignInSection(),
     _Section.data => const DataSection(),
   };
 

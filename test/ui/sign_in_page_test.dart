@@ -64,12 +64,12 @@ void main() {
     expect(_key('sign-in-token'), findsOneWidget);
   });
 
-  testWidgets('GitHub says when the server has none set up', (tester) async {
+  testWidgets('sign-in says when the server has none set up', (tester) async {
     await pumpApp(tester, signedIn: false);
     await tester.enterText(_key('server-url'), gatewayUrl);
     await tester.tap(_key('sign-in-github'));
     await tester.pumpAndSettle();
-    expect(find.textContaining('no GitHub sign-in set up'), findsOneWidget);
+    expect(find.textContaining('no sign-in set up'), findsOneWidget);
   });
 
   testWidgets('a session that ended says why', (tester) async {

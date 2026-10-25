@@ -7,7 +7,7 @@ import '../../../ui/widgets.dart';
 import 'access_tab.dart';
 import 'portals_tab.dart';
 
-/// Portals: publish chosen servers as authenticated MCP endpoints through the
+/// MCP Portals: publish chosen servers as authenticated MCP endpoints through the
 /// server, and manage who may use them.
 class PortalsPage extends ConsumerWidget {
   const PortalsPage({super.key});
@@ -39,7 +39,7 @@ class PortalsPage extends ConsumerWidget {
     }
 
     return PageScaffold(
-      title: 'Portals',
+      title: 'MCP Portals',
       subtitle:
           'Server ${data.serverUrl}${data.status == null ? '' : ' · v${data.status!.version}'}',
       actions: [

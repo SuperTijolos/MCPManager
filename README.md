@@ -8,8 +8,8 @@ It is a Flutter web app built for the Hacktober Portimão festival, and a ground
 - **Inspect and test tools.** Read each tool's schema and run it from a test bench. Rules add shared arguments such as `reason` or `expected result` to many tools at once, and can hide or reshape what the Operator sees.
 - **Audit everything.** Every tool call, connection, sign-in and management action is recorded with the actor and how it was approved. Secrets are redacted, and the log can be filtered, paginated and inspected event by event.
 - **Operate with approvals.** Read-only tools run without asking. Anything else waits for your approval by default. Each chat has an **Ask first / Automatic** switch: in Automatic, its tool calls run without asking, including configuration changes.
-- **A dashboard over a server.** The Flutter app is the dashboard; the Dart **server** in [`server/`](server/README.md) holds everything in PostgreSQL: servers and their credentials, OAuth sign-ins, rules, portals, the audit log, conversations and model providers (with their keys). The server connects to your MCP servers, so they need no CORS settings, and it records every call whoever made it. Several people can share one server: they sign in with **GitHub** (limited to the organisations you list), and the dashboard updates live as others change things.
-- **Publish servers as portals.** The same server turns chosen servers into authenticated MCP endpoints that Claude, ChatGPT or any MCP client can use, with the same tool rules, access tokens and OAuth sign-in. See [Portals and the server](#portals-and-the-server).
+- **A dashboard over a server.** The Flutter app is the dashboard; the Dart **server** in [`server/`](server/README.md) holds everything in PostgreSQL: servers and their credentials, OAuth sign-ins, rules, portals, the audit log, conversations and model providers (with their keys). The server connects to your MCP servers, so they need no CORS settings, and it records every call whoever made it. Several people can share one server: they sign in with **GitHub or Google** (limited to the organisations, logins, email domains or addresses you list in Settings), and the dashboard updates live as others change things.
+- **Publish servers as MCP Portals.** The same server turns chosen servers into authenticated MCP endpoints that Claude, ChatGPT or any MCP client can use, with the same tool rules, access tokens and OAuth sign-in. See [MCP Portals and the server](#mcp-portals-and-the-server).
 
 **Credits.** Made in collaboration with Tomás Rodrigues, [GuikiPT](https://github.com/GuikiPT) and [AjaxR0](https://github.com/AjaxR0). Their names and GitHub profiles are also listed on the MLH team page for the project.
 
@@ -20,13 +20,13 @@ It is a Flutter web app built for the Hacktober Portimão festival, and a ground
 | **Overview** | Servers online, tools, 24 h call volume per hour, error rate, latency (avg / p95), busiest tools, model reachability check. |
 | **MCP Servers** | Add/edit/remove MCP servers (Streamable HTTP or legacy HTTP+SSE, detected automatically), bearer token / OAuth and custom headers, live status, protocol, latency and a trace of what was tried. The Edit dialog is sectioned (connection, authentication, headers, advanced) and has a **Test connection** button. |
 | **MCP Tools** | Browse and search every tool, filter by read-only/may-modify/hidden status and connected server, inspect effective rules, read its schema, and run it from a test bench. The list and detail panes are separated by a draggable divider (double-click resets, ←/→ nudge). **Rules** reshape what the Operator sees (see below). |
-| **Portals** | Publish chosen servers as MCP endpoints: group them into portals and create access tokens. What clients call shows on the Audit page, marked as coming through a portal. |
+| **MCP Portals** | Publish chosen servers as MCP endpoints: group them into portals and create access tokens. What clients call shows on the Audit page, marked as coming through a portal. |
 | **Chat** | Chat with the model. It can manage servers, find the right tool for a job, recover from failed calls, and run your servers' tools. Conversations are saved: a history panel lets you search, rename, delete and reopen older chats. |
 | **Audit** | Two views: **MCP tools** (tool calls) and **Activity** (connections, sign-ins and management actions), each with its own count and filters. Filter, search and paginate (page size selectable). Open any row for a detail dialog with the redacted arguments, the forwarded values, the result, the actor and the approval mode, or copy it as JSON. |
 | **Settings** | Model providers and enabled models (with presets for common endpoints; keys stay on the server), Operator limits and your own instructions, plus who is signed in, where the data lives, and clean-up. |
 | **About / Contributors** | What the app does, how the pieces fit, safety and data notes, facts about this copy (the server, who is signed in, the OAuth redirect URI), and the people who built it. |
 
-### Portals and the server
+### MCP Portals and the server
 
 A portal is one MCP endpoint (`https://your-host/mcp/<name>`) that publishes a set of your servers to other MCP clients. The browser cannot serve an endpoint, so the **server** does: it applies your tool rules, checks the caller (an access token, or OAuth sign-in for web connectors), forwards the call and records it.
 
@@ -35,7 +35,7 @@ docker compose -f server/docker-compose.yml up -d --build   # Postgres + the ser
 docker compose -f server/docker-compose.yml logs portal      # the admin token, printed once
 ```
 
-Without Docker: create a database and run `DATABASE_URL=postgresql://… dart run bin/mcp_portal.dart` in `server/`. The [server README](server/README.md) covers GitHub sign-in, HTTPS, settings and the security model; [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) explains how the pieces fit.
+Without Docker: create a database and run `DATABASE_URL=postgresql://… dart run bin/mcp_portal.dart` in `server/`. The [server README](server/README.md) covers GitHub and Google sign-in, HTTPS, settings and the security model; [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) explains how the pieces fit.
 
 ### Repository layout
 
@@ -43,7 +43,7 @@ Without Docker: create a database and run `DATABASE_URL=postgresql://… dart ru
 |---|---|
 | `lib/`, `web/` | The Flutter web dashboard. |
 | `packages/mcp_core/` | Flutter-free core shared by the dashboard and the server: MCP models and clients, OAuth, tool rules, redaction. |
-| `server/` | The server: API, portals, GitHub sign-in, event stream. |
+| `server/` | The server: API, MCP Portals, GitHub and Google sign-in, event stream. |
 | `migrations/` | The SQL schema, applied by the server at start-up. |
 
 ### Tool rules
@@ -68,7 +68,7 @@ The Operator is given a map of your tools grouped by purpose (for example "run c
 
 ## Run it
 
-Start the server first (see [Portals and the server](#portals-and-the-server)); it needs a PostgreSQL database and prints an **admin token** at its first start.
+Start the server first (see [MCP Portals and the server](#mcp-portals-and-the-server)); it needs a PostgreSQL database and prints an **admin token** at its first start.
 
 ```bash
 cp .env.example .env        # the .env asset must exist to build
@@ -76,7 +76,7 @@ flutter pub get
 flutter run -d chrome
 ```
 
-The dashboard opens on a sign-in page: enter the server's address (set `PORTAL_URL` in `.env` to prefill it) and **Sign in with GitHub**, or use the admin token while GitHub is not set up. Allow the dashboard's address in the server (`PORTAL_ALLOWED_ORIGINS`, `localhost` is always allowed) and, for GitHub, set the OAuth app's callback to the *server's* `/auth/github/callback`.
+The dashboard opens on a sign-in page: enter the server's address (set `PORTAL_URL` in `.env` to prefill it) and sign in with **GitHub** or **Google**, or use the admin token while none is set up. Set providers up under **Settings → Sign-in** (details in the [server README](server/README.md#signing-in-github-and-google)). Allow the dashboard's address in the server (`PORTAL_ALLOWED_ORIGINS`, `localhost` is always allowed) and set each OAuth app's callback to the *server's* `/auth/<provider>/callback`.
 
 ### Sharing with another machine (Tailscale / LAN)
 

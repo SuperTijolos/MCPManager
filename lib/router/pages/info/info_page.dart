@@ -66,11 +66,11 @@ class InfoPage extends ConsumerWidget {
                   tile(
                     _Feature(
                       icon: Icons.hub_outlined,
-                      title: 'Portals',
-                      route: '/portals',
+                      title: 'MCP Portals',
+                      route: '/mcp-portals',
                       body:
                           'Publish chosen servers as authenticated MCP endpoints for Claude, ChatGPT or any MCP client. '
-                          'Portals are served by your MCP Manager server: it applies your tool rules, checks access '
+                          'MCP Portals are served by your MCP Manager server: it applies your tool rules, checks access '
                           'tokens or OAuth sign-ins, forwards each call and records it in the same audit log. This page manages them.',
                     ),
                   ),
