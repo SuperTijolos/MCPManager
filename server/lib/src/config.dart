@@ -16,6 +16,9 @@ class GatewayConfig {
     List<String>? githubUsers,
     this.githubUrl = 'https://github.com',
     this.githubApiUrl = 'https://api.github.com',
+    this.googleAuthUrl = 'https://accounts.google.com/o/oauth2/v2/auth',
+    this.googleTokenUrl = 'https://oauth2.googleapis.com/token',
+    this.googleUserinfoUrl = 'https://openidconnect.googleapis.com/v1/userinfo',
     this.sessionDays = 7,
     this.eventHeartbeat = const Duration(seconds: 25),
     this.healthInterval = const Duration(minutes: 1),
@@ -56,6 +59,11 @@ class GatewayConfig {
   /// Change both for GitHub Enterprise Server.
   final String githubUrl;
   final String githubApiUrl;
+
+  /// Google's endpoints; only tests point these elsewhere.
+  final String googleAuthUrl;
+  final String googleTokenUrl;
+  final String googleUserinfoUrl;
 
   /// Conversations kept per person; the least recently used go first.
   final int maxChatsPerOwner;

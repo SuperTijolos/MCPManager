@@ -120,6 +120,9 @@ void main() {
     test('reports whether sign-in is set up', () async {
       final r = await get('/auth/config');
       expect(jsonDecode(r.body), {
+        'providers': [
+          {'id': 'github', 'kind': 'github', 'name': 'GitHub'},
+        ],
         'github': true,
         'orgs': ['Acme'],
       });
@@ -215,6 +218,7 @@ void main() {
         'POST /login/oauth/access_token',
         'GET /user',
         'GET /user/orgs',
+        'GET /user/emails',
       ]);
     });
 

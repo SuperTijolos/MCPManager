@@ -136,6 +136,8 @@ class AdminApi {
         return _events();
       case 'members':
         return _members(request, method, parts);
+      case 'auth' when parts.length >= 2 && parts[1] == 'providers':
+        return _authProviders(request, method, parts);
       case 'rules' when parts.length == 1:
         return _rules(request, method);
       case 'audit' when method == 'POST' && parts.length == 2:
@@ -217,6 +219,180 @@ class AdminApi {
       return Response(204);
     }
     throw ApiError(404, 'not_found');
+  }
+
+  Json _providerJson(AuthProviderConfig p, Request request) =>
+      p.toPublicJson('${baseUrl(request)}/auth/${p.id}/callback');
+
+  /// The ways to sign in, set up from the dashboard. The secret is write-only:
+  /// it goes in with a create or update and never comes back out.
+  Future<Response> _authProviders(
+    Request request,
+    String method,
+    List<String> parts,
+  ) async {
+    if (parts.length == 2) {
+      if (method == 'GET') {
+        return _json(200, [
+          for (final p in login.providers()) _providerJson(p, request),
+        ]);
+      }
+      if (method == 'POST') {
+        final body = await _body(request);
+        final kind = '${body['kind']}';
+        if (!AuthProviderConfig.kinds.contains(kind)) {
+          throw ApiError(
+            400,
+            'invalid_kind',
+            'kind must be one of ${AuthProviderConfig.kinds.join(', ')}',
+          );
+        }
+        final name = '${body['name'] ?? ''}'.trim();
+        final id = body['id'] is String && '${body['id']}'.isNotEmpty
+            ? '${body['id']}'.trim().toLowerCase()
+            : slugify(name.isEmpty ? kind : name);
+        final saved = await _saveProvider(id, kind, body, creating: true);
+        return _json(201, _providerJson(saved, request));
+      }
+    } else if (parts.length == 3) {
+      final id = parts[2];
+      final current = login.provider(id);
+      if (method == 'GET') {
+        return _json(
+          200,
+          _providerJson(
+            current ?? (throw ApiError(404, 'provider_not_found')),
+            request,
+          ),
+        );
+      }
+      if (method == 'PUT') {
+        if (current == null) throw ApiError(404, 'provider_not_found');
+        final body = await _body(request);
+        final saved = await _saveProvider(id, current.kind, body);
+        return _json(200, _providerJson(saved, request));
+      }
+      if (method == 'DELETE') {
+        if (current == null) throw ApiError(404, 'provider_not_found');
+        if (current.fromEnvironment) {
+          throw ApiError(
+            409,
+            'provider_from_environment',
+            'This one is set by the server\'s environment; change it there.',
+          );
+        }
+        await store.update((s) {
+          s.authProviders.removeWhere((p) => p.id == id);
+          // Everyone who came in through it is signed out with it.
+          final gone = {
+            for (final m in s.members)
+              if (m.provider == id) m.id,
+          };
+          s.sessions.removeWhere((x) => gone.contains(x.memberId));
+        });
+        return Response(204);
+      }
+    }
+    throw ApiError(405, 'method_not_allowed');
+  }
+
+  Future<AuthProviderConfig> _saveProvider(
+    String id,
+    String kind,
+    Json body, {
+    bool creating = false,
+  }) async {
+    if (!_slugPattern.hasMatch(id) || reservedProviderIds.contains(id)) {
+      throw ApiError(
+        400,
+        'invalid_id',
+        'Use lowercase letters, numbers and hyphens',
+      );
+    }
+    final existing = store.state.authProviders
+        .where((p) => p.id == id)
+        .firstOrNull;
+    if (creating && login.provider(id) != null) {
+      throw ApiError(409, 'provider_id_in_use');
+    }
+    if (!creating && existing == null) {
+      throw ApiError(
+        409,
+        'provider_from_environment',
+        'This one is set by the server\'s environment; change it there.',
+      );
+    }
+
+    List<String>? list(String key, {String Function(String)? clean}) {
+      if (!body.containsKey(key)) return null;
+      final raw = body[key];
+      if (raw is! List) throw ApiError(400, 'invalid_$key');
+      final seen = <String>{};
+      return [
+        for (final item in raw)
+          if ('$item'.trim().isNotEmpty &&
+              seen.add((clean ?? (x) => x)('$item'.trim())))
+            (clean ?? (x) => x)('$item'.trim()),
+      ];
+    }
+
+    final emails = list('emails', clean: (e) => e.toLowerCase());
+    for (final e in emails ?? const <String>[]) {
+      if (!e.contains('@') || e.startsWith('@') || e.endsWith('@')) {
+        throw ApiError(400, 'invalid_emails', '"$e" is not an email address');
+      }
+    }
+    final domains = list(
+      'domains',
+      clean: (d) => d.replaceFirst(RegExp(r'^@'), '').toLowerCase(),
+    );
+    for (final d in domains ?? const <String>[]) {
+      if (!d.contains('.') || d.contains('@') || d.contains(' ')) {
+        throw ApiError(400, 'invalid_domains', '"$d" is not a domain');
+      }
+    }
+
+    final name = body['name'] is String && '${body['name']}'.trim().isNotEmpty
+        ? '${body['name']}'.trim()
+        : null;
+    final secret = body['clientSecret'];
+    var next =
+        (existing ??
+                AuthProviderConfig(
+                  id: id,
+                  kind: kind,
+                  name: name ?? (kind == 'google' ? 'Google' : 'GitHub'),
+                ))
+            .copyWith(
+              name: name,
+              clientId: body['clientId'] is String
+                  ? '${body['clientId']}'.trim()
+                  : null,
+              // Absent or null keeps the stored secret; an empty string clears it.
+              clientSecret: secret is String && secret.isNotEmpty
+                  ? secret.trim()
+                  : null,
+              clearClientSecret: secret is String && secret.isEmpty,
+              enabled: body['enabled'] is bool ? body['enabled'] as bool : null,
+              orgs: kind == 'github' ? list('orgs') : null,
+              users: kind == 'github' ? list('users') : null,
+              domains: domains,
+              emails: emails,
+            );
+    if (next.enabled && !next.configured) {
+      // Turning on something with no client id and secret would offer a button
+      // that cannot work.
+      next = next.copyWith(enabled: false);
+    }
+    await store.update((s) {
+      final i = s.authProviders.indexWhere((p) => p.id == id);
+      if (i < 0) {
+        s.authProviders.add(next);
+      } else {
+        s.authProviders[i] = next;
+      }
+    });
+    return next;
   }
 
   Json _status(Request request) {

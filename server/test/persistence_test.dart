@@ -296,6 +296,7 @@ void main() {
           '20261027000000_chats',
           '20261028000000_llm_providers',
           '20261029000000_audit_kinds',
+          '20261030000000_auth_providers',
         ],
       );
     });
@@ -307,7 +308,7 @@ void main() {
       for (final gw in starts) {
         await gw.close();
       }
-      expect(await rows('select 1 from schema_migrations'), hasLength(7));
+      expect(await rows('select 1 from schema_migrations'), hasLength(8));
     });
 
     test('creates every table the server needs', () async {
@@ -336,6 +337,8 @@ void main() {
           'chat_content',
           'llm_providers',
           'llm_provider_secrets',
+          'auth_providers',
+          'auth_provider_secrets',
           'settings',
         ]),
       );

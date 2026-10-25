@@ -2,15 +2,24 @@ import 'dart:convert';
 import 'dart:io';
 
 class GhUser {
-  GhUser(this.id, this.login, {this.name, this.orgs = const []});
+  GhUser(
+    this.id,
+    this.login, {
+    this.name,
+    this.orgs = const [],
+    this.emails = const [],
+  });
   final int id;
   final String login;
   final String? name;
   final List<String> orgs;
+
+  /// `(address, verified)` pairs, as `/user/emails` lists them.
+  final List<(String, bool)> emails;
 }
 
-/// Just enough of GitHub for the sign-in: the code exchange, `/user` and
-/// `/user/orgs`.
+/// Just enough of GitHub for the sign-in: the code exchange, `/user`,
+/// `/user/orgs` and `/user/emails`.
 class FakeGitHub {
   FakeGitHub._(this._server);
 
@@ -86,6 +95,12 @@ class FakeGitHub {
       if (orgsStatus != 200) return send(orgsStatus, {'message': 'nope'});
       return send(200, [
         for (final o in u.orgs) {'login': o},
+      ]);
+    }
+    if (request.uri.path == '/user/emails') {
+      return send(200, [
+        for (final (address, verified) in u.emails)
+          {'email': address, 'verified': verified, 'primary': false},
       ]);
     }
     send(404, {'message': 'Not Found'});

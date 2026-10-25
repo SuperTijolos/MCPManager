@@ -3,7 +3,8 @@ library;
 
 export 'src/admin_api.dart' show slugify;
 export 'src/audit.dart' show GatewayAuditEvent, GatewayAuditLog;
-export 'src/chats.dart' show ChatContent, ChatDocument, ChatMeta, ChatRepository;
+export 'src/chats.dart'
+    show ChatContent, ChatDocument, ChatMeta, ChatRepository;
 export 'src/config.dart';
 export 'src/events.dart' show EventBus, GatewayEvent;
 export 'src/mcp_endpoint.dart' show gatewayVersion, supportedProtocolVersions;

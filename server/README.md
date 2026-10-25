@@ -53,19 +53,25 @@ The image is a single static program on an empty base, runs as an unprivileged u
 | `GITHUB_URL`, `GITHUB_API_URL` | github.com | Only for GitHub Enterprise Server. |
 | `PORTAL_ALLOWED_ORIGINS` | none | Comma-separated browser origins allowed to call the admin API, besides `localhost`. Add the address the app is served from. |
 
-### Sign in with GitHub
+### Signing in: GitHub and Google
 
-1. On GitHub, create an **OAuth app** (Settings → Developer settings → OAuth Apps; for an organisation, the organisation's own settings). Set the *Authorization callback URL* to `<PORTAL_PUBLIC_URL>/auth/github/callback`, for example `https://mcp.example.com/auth/github/callback`.
-2. Give the server the client id and secret, and say who may in:
+People sign in with one or more providers. Set them up in the dashboard under **Settings → Sign-in**: paste the OAuth client id and secret, say who is let in, and the button appears on the sign-in page and on the page web connectors (Claude, ChatGPT) send you to. The client secret is stored on the server and is never sent back to the dashboard.
 
-   ```bash
-   GITHUB_CLIENT_ID=… GITHUB_CLIENT_SECRET=… DASHBOARD_GITHUB_ORGS=my-org
-   ```
-3. Members of `my-org` can now sign in. The server asks GitHub for the person's profile and organisations (`read:user read:org`), keeps neither the GitHub token nor anything beyond the login, name, avatar and organisation names, and gives the browser its own session token.
+1. **Register the server as an OAuth app** with the provider, with the callback URL the dialog shows, `<PORTAL_PUBLIC_URL>/auth/<id>/callback`:
+   * **GitHub:** Settings → Developer settings → OAuth Apps (or the organisation's own settings). Callback `https://mcp.example.com/auth/github/callback`.
+   * **Google:** Google Cloud console → APIs & Services → Credentials → OAuth client ID, type *Web application*; add the callback as an authorised redirect URI.
+2. **Add it under Settings → Sign-in** and choose who is let in. Anyone who matches *any* entry gets in:
+   * **GitHub logins** and **GitHub organisations** (GitHub only);
+   * **Email domains** (`example.com`) and **email addresses** (both providers). Only addresses the provider has *verified* count: GitHub's verified emails, Google's `email_verified`.
+3. With nothing on the list nobody can sign in through that provider. A provider can be turned off with its switch; that signs its members out at once.
 
-With neither `DASHBOARD_GITHUB_ORGS` nor `DASHBOARD_GITHUB_USERS` set, nobody can sign in. Organisations that restrict third-party apps must approve the OAuth app (or the person must make their membership public), or GitHub hides the membership and the sign-in is refused. The allow-list is checked on every request, so removing an organisation from it locks its members out at once; removing someone's membership on GitHub takes effect at their next sign-in (at most `PORTAL_SESSION_DAYS` later), or immediately if you delete them under `/api/members`.
+The server asks for the profile and, on GitHub, organisations and verified emails (`read:user read:org user:email`); on Google, `openid email profile`. It keeps neither provider's token, only the login, name, avatar, organisation names and verified emails, and gives the browser its own session token. Organisations that restrict third-party apps must approve the OAuth app (or the person must make their membership public), or GitHub hides the membership and the sign-in is refused.
 
-The admin token keeps working next to this, for scripts and for first set-up. When a web connector (Claude, ChatGPT) asks to be connected, the consent page offers *Sign in with GitHub* as well as the admin token.
+The list is checked on every request, so removing an entry or turning a provider off locks people out at once. Removing someone from GitHub takes effect at their next sign-in (at most `PORTAL_SESSION_DAYS` later), or immediately if you delete them under `/api/members`.
+
+**From the environment.** `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `DASHBOARD_GITHUB_ORGS` and `DASHBOARD_GITHUB_USERS` still work and appear as a read-only *GitHub* provider (marked "Set by the server"); that is the way to have sign-in from the first start, before anyone can open Settings.
+
+The admin token keeps working next to this, for scripts and for first set-up. When a web connector (Claude, ChatGPT) asks to be connected, the consent page offers a *Sign in with …* button for each provider as well as the admin token.
 
 ### Put HTTPS in front of it
 
@@ -73,11 +79,11 @@ The gateway speaks plain HTTP. Anything beyond your own machine needs TLS, or th
 
 ## Using it
 
-1. **Sign in.** Open the dashboard and sign in with GitHub (see above), or with the admin token.
+1. **Sign in.** Open the dashboard and sign in with GitHub or Google (see above), or with the admin token.
 2. **Add servers.** On *MCP Servers*, add each MCP server once: the address and any token or OAuth sign-in. Servers that use OAuth are signed in by this server, once, for everyone and every portal.
-3. **Create a portal.** On *Portals*, choose a name, an address (`/mcp/<address>`) and the servers it publishes. *Tools* shows what clients will see and lets you leave tools out of this portal.
+3. **Create a portal.** On *MCP Portals*, choose a name, an address (`/mcp/<address>`) and the servers it publishes. *Tools* shows what clients will see and lets you leave tools out of this portal.
 4. **Let a client in.**
-   * **Claude, ChatGPT and other web connectors** add a custom connector with the portal address. The client registers itself and opens this server's sign-in page, where you sign in with GitHub (or enter the admin token). Tokens last an hour and refresh by themselves.
+   * **Claude, ChatGPT and other web connectors** add a custom connector with the portal address. The client registers itself and opens this server's sign-in page, where you sign in (or enter the admin token). Tokens last an hour and refresh by themselves.
    * **Claude Code, scripts, MCP Inspector** use an access token from *Access*: `claude mcp add --transport http dev https://mcp.example.com/mcp/dev --header "Authorization: Bearer mcp_…"`. A token can be limited to some portals and can expire. Its secret is shown once.
 5. **Watch it.** The dashboard's *Audit* page lists each call with who made it, the arguments the client sent, what was forwarded to the server, and the result; calls through a portal are marked as such.
 
@@ -100,8 +106,8 @@ All admin routes need `Authorization: Bearer <admin token or session token>` and
 | Route | |
 |---|---|
 | `GET /health` | Liveness, no credential. |
-| `GET /auth/config` | Whether GitHub sign-in is set up, no credential. |
-| `GET /auth/github?return_to=` | Starts the GitHub sign-in. `return_to` is a path on the server, or an address of an allowed origin (that one gets `#session=<token>`). |
+| `GET /auth/config` | The sign-in providers that are on (`providers: [{id, kind, name}]`), no credential. |
+| `GET /auth/<id>?return_to=` | Starts the sign-in through provider `<id>` (`github`, `google`, …); the provider returns to `/auth/<id>/callback`. `return_to` is a path on the server, or an address of an allowed origin (that one gets `#session=<token>`). |
 | `GET /api/me`, `POST /api/logout` | Who is calling; end this session. |
 | `GET /api/members`, `DELETE /api/members/{id}` | Signed-in people; removing one ends their sessions. |
 | `GET /api/events` | A Server-Sent Events stream: `audit` (a call was recorded), `changed` (what stored setting changed), `health` (a server went up or down), `oauth` (a server was signed in or out), `chat` (a conversation changed). Nothing is replayed after a reconnect. |
@@ -115,6 +121,7 @@ All admin routes need `Authorization: Bearer <admin token or session token>` and
 | `GET /api/status` | Version, public address, counts. |
 | `GET/POST /api/servers`, `GET/PUT/DELETE /api/servers/{id}` | Upstream servers. `PUT` creates under the id you choose. Header values are never returned, only their names. |
 | `POST /api/servers/{id}/test`, `GET /api/servers/{id}/tools` | Connect and list tools. |
+| `GET/POST /api/auth/providers`, `GET/PUT/DELETE /api/auth/providers/{id}` | Sign-in providers: `kind` (`github`/`google`), `name`, `clientId`, `clientSecret` (write-only: omitted keeps it, empty clears it), `enabled`, `orgs`, `users`, `domains`, `emails`. The environment's GitHub app is listed read-only. |
 | `GET/POST /api/portals`, `GET/PUT/DELETE /api/portals/{id}` | Portals (`name`, `slug`, `description`, `enabled`, `servers`, `excludedTools`). |
 | `GET /api/portals/{id}/tools?includeHidden=1&refresh=1` | The tools the portal exposes, with hidden and excluded ones on request. |
 | `GET/POST /api/tokens`, `DELETE /api/tokens/{id}` | Access tokens; `POST` returns the secret once. |

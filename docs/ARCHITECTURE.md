@@ -4,7 +4,7 @@ The Flutter app becomes a **dashboard**. The Dart **server** becomes the system
 of record, with **PostgreSQL** as its only storage.
 
 ```
- Flutter dashboard ── GitHub login, REST + live event stream ──▶ Portal server ──▶ PostgreSQL
+ Flutter dashboard ── sign-in, REST + live event stream ──▶ Portal server ──▶ PostgreSQL
                                                                      ▲   │
                                           MCP clients (Claude, …) ───┘   └──▶ upstream MCP servers
 ```
@@ -13,7 +13,7 @@ of record, with **PostgreSQL** as its only storage.
 
 | Concern | Owner |
 |---|---|
-| Sign-in (GitHub OAuth, org/user allow-list) | Server |
+| Sign-in (GitHub and Google OAuth, allow-lists by organisation, login, email domain or address) | Server |
 | Every write, every MCP call, upstream OAuth and credentials | Server |
 | Live updates (new audit rows, server status) | Server → dashboard over Server-Sent Events |
 | Storage | PostgreSQL (the server is the only client) |
@@ -27,7 +27,7 @@ credentials never leave the server.
 ## Data
 
 `members`, `servers`, `server_credentials`, `tool_rules`, `tool_overrides`,
-`portals`, `access_tokens`, `oauth_clients`, `oauth_grants`, `audit_events`,
+`auth_providers`, `auth_provider_secrets`, `portals`, `access_tokens`, `oauth_clients`, `oauth_grants`, `audit_events`,
 `settings`, `sessions`, `server_oauth`, `chats`, `chat_content`, `llm_providers`
 and `llm_provider_secrets`.
 
@@ -46,9 +46,7 @@ instance is the writer.
 
 ## Access
 
-1. The dashboard sends the user to the server's `/auth/github`; GitHub returns
-   to the server, which exchanges the code, reads the login and organisations,
-   and checks them against `DASHBOARD_GITHUB_ORGS` / `DASHBOARD_GITHUB_USERS`.
+1. The dashboard sends the user to the server's `/auth/<provider>`; the provider (GitHub or Google, set up under Settings → Sign-in and stored in `auth_providers`, with the secret in `auth_provider_secrets`) returns to the server, which exchanges the code, reads the profile (and GitHub organisations and verified emails), and checks them against that provider's allow-list. The server's environment can still provide a read-only GitHub provider (`GITHUB_*`, `DASHBOARD_GITHUB_*`).
 2. Allowed users become rows in `members` and get a session token for the
    dashboard. Real user accounts later are more rows in `members` with a role.
 3. Portal OAuth consent (for MCP clients) uses the same sign-in instead of

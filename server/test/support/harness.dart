@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:mcp_portal_server/mcp_portal_server.dart';
 
 import 'fake_github.dart';
+import 'fake_google.dart';
 
 const adminToken = 'admin-token-for-tests-1234';
 
@@ -26,6 +27,8 @@ class Harness {
     List<String> allowedOrigins = const [],
     String? publicUrl,
     FakeGitHub? github,
+    FakeGoogle? google,
+    bool githubFromEnvironment = true,
     List<String> githubOrgs = const [],
     List<String> githubUsers = const [],
     Duration? eventHeartbeat,
@@ -41,8 +44,12 @@ class Harness {
         adminToken: token,
         allowedOrigins: allowedOrigins,
         publicBaseUrl: publicUrl,
-        githubClientId: github == null ? null : 'gh-client',
-        githubClientSecret: github == null ? null : 'gh-secret',
+        githubClientId: github == null || !githubFromEnvironment
+            ? null
+            : 'gh-client',
+        githubClientSecret: github == null || !githubFromEnvironment
+            ? null
+            : 'gh-secret',
         githubOrgs: githubOrgs,
         githubUsers: githubUsers,
         eventHeartbeat: eventHeartbeat ?? const Duration(seconds: 25),
@@ -50,6 +57,15 @@ class Harness {
         maxChatsPerOwner: maxChatsPerOwner,
         githubUrl: github?.url ?? 'https://github.com',
         githubApiUrl: github?.url ?? 'https://api.github.com',
+        googleAuthUrl: google == null
+            ? 'https://accounts.google.com/o/oauth2/v2/auth'
+            : '${google.url}/auth',
+        googleTokenUrl: google == null
+            ? 'https://oauth2.googleapis.com/token'
+            : '${google.url}/token',
+        googleUserinfoUrl: google == null
+            ? 'https://openidconnect.googleapis.com/v1/userinfo'
+            : '${google.url}/userinfo',
       ),
       clock: clock.call,
       inMemory: databaseUrl == null,

@@ -17,17 +17,23 @@ const _pendingTtl = Duration(minutes: 10);
 const _maxPending = 500;
 
 class _Pending {
-  _Pending(this.returnTo, this.expiresAt);
+  _Pending(this.providerId, this.returnTo, this.expiresAt);
+  final String providerId;
   final String returnTo;
   final DateTime expiresAt;
 }
 
-/// Signing in to the dashboard with GitHub.
+/// Ids that are not providers.
+const reservedProviderIds = {'config', 'done'};
+
+/// Signing in to the dashboard with GitHub, Google, or any other provider set
+/// up for it.
 ///
-/// The browser is sent to GitHub and comes back to `/auth/github/callback`.
-/// The server reads who the person is and which organisations they belong to,
-/// checks them against the allow-list, and hands out a session token. The
-/// GitHub access token is used once and thrown away.
+/// The browser is sent to the provider and comes back to
+/// `/auth/<id>/callback`. The server reads who the person is (and, for GitHub,
+/// which organisations they belong to), checks that against the provider's
+/// allow-list, and hands out a session token. The provider's own token is used
+/// once and thrown away.
 class LoginService {
   LoginService({
     required this.store,
@@ -48,15 +54,65 @@ class LoginService {
 
   final _pending = <String, _Pending>{};
 
-  bool get enabled => config.githubConfigured;
+  /// Every way to sign in: the GitHub app of the server's environment (unless
+  /// one set up in the dashboard has the same id), then the ones set up in the
+  /// dashboard.
+  List<AuthProviderConfig> providers() {
+    final saved = store.state.authProviders;
+    return [
+      if (config.githubConfigured && saved.every((p) => p.id != 'github'))
+        AuthProviderConfig(
+          id: 'github',
+          kind: 'github',
+          name: 'GitHub',
+          clientId: config.githubClientId!,
+          clientSecret: config.githubClientSecret,
+          orgs: config.githubOrgs,
+          users: config.githubUsers,
+          fromEnvironment: true,
+        ),
+      ...saved,
+    ];
+  }
 
-  /// Whether [member] may use the dashboard right now. Checked on every
+  AuthProviderConfig? provider(String id) =>
+      providers().where((p) => p.id == id).firstOrNull;
+
+  /// The ones that can be used right now.
+  List<AuthProviderConfig> enabledProviders() => [
+    for (final p in providers())
+      if (p.enabled && p.configured) p,
+  ];
+
+  bool get enabled => enabledProviders().isNotEmpty;
+
+  /// Whether [member] may use the dashboard right now: their provider must
+  /// still be on, and they must match its allow-list. Checked on every
   /// request, so taking someone off the list locks them out at once.
   bool allowed(Member member) {
-    final login = member.login.toLowerCase();
-    if (config.githubUsers.any((u) => u.toLowerCase() == login)) return true;
-    final orgs = {for (final o in member.orgs) o.toLowerCase()};
-    return config.githubOrgs.any((o) => orgs.contains(o.toLowerCase()));
+    final p = provider(member.provider);
+    if (p == null || !p.enabled || !p.configured) return false;
+    return matchesAllowList(p, member);
+  }
+
+  /// Whether [member] is on [p]'s allow-list (anyone listed by login,
+  /// organisation, email domain or email address).
+  static bool matchesAllowList(AuthProviderConfig p, Member member) {
+    bool any(List<String> list, Iterable<String> have) {
+      final set = {for (final h in have) h.toLowerCase()};
+      return list.any((x) => set.contains(x.toLowerCase()));
+    }
+
+    if (p.kind == 'github') {
+      if (any(p.users, [member.login])) return true;
+      if (any(p.orgs, member.orgs)) return true;
+    }
+    if (any(p.emails, member.emails)) return true;
+    final domains = [
+      for (final e in member.emails)
+        if (e.contains('@')) e.substring(e.lastIndexOf('@') + 1),
+    ];
+    return any(p.domains, domains);
   }
 
   // ------------------------------------------------------------- identity
@@ -102,30 +158,39 @@ class LoginService {
     final method = request.method;
 
     if (path == 'auth/config' && method == 'GET') {
+      final on = enabledProviders();
+      final github = on.where((p) => p.kind == 'github').firstOrNull;
       return _json(200, {
-        'github': enabled,
-        'orgs': enabled ? config.githubOrgs : const <String>[],
+        'providers': [
+          for (final p in on) {'id': p.id, 'kind': p.kind, 'name': p.name},
+        ],
+        // The first GitHub app, for dashboards that predate several providers.
+        'github': github != null,
+        'orgs': github?.orgs ?? const <String>[],
       });
     }
-    if (!enabled) {
+    if (path == 'auth/done' && method == 'GET') return _done(request);
+
+    final route = RegExp(r'^auth/([a-z0-9-]+)(/callback)?$').firstMatch(path);
+    if (route == null || method != 'GET') {
+      return _json(404, {'error': 'not_found'});
+    }
+    final id = route.group(1)!;
+    final p = reservedProviderIds.contains(id) ? null : provider(id);
+    if (p == null || !p.enabled || !p.configured) {
       return htmlResponse(
         404,
         htmlPage(
           'Sign-in is not set up',
-          '<p>This server has no GitHub login yet. Set <code>GITHUB_CLIENT_ID</code>, '
-              '<code>GITHUB_CLIENT_SECRET</code> and <code>DASHBOARD_GITHUB_ORGS</code>.</p>',
+          '<p>This server has no sign-in called <code>${escapeHtml(id)}</code> '
+              'turned on. Set one up under Settings → Sign-in in the dashboard.</p>',
         ),
       );
     }
-    if (path == 'auth/github' && method == 'GET') return _begin(request);
-    if (path == 'auth/github/callback' && method == 'GET') {
-      return _callback(request);
-    }
-    if (path == 'auth/done' && method == 'GET') return _done(request);
-    return _json(404, {'error': 'not_found'});
+    return route.group(2) == null ? _begin(request, p) : _callback(request, p);
   }
 
-  Response _begin(Request request) {
+  Response _begin(Request request, AuthProviderConfig p) {
     final returnTo = safeReturn(request.url.queryParameters['return_to']);
     if (returnTo == null) {
       return htmlResponse(
@@ -146,18 +211,30 @@ class LoginService {
       );
     }
     final state = randomSecret(bytes: 24);
-    _pending[state] = _Pending(returnTo, now.add(_pendingTtl));
+    _pending[state] = _Pending(p.id, returnTo, now.add(_pendingTtl));
 
     final base = baseUrl(request);
-    final url = Uri.parse('${config.githubUrl}/login/oauth/authorize').replace(
-      queryParameters: {
-        'client_id': config.githubClientId!,
-        'redirect_uri': '$base/auth/github/callback',
-        'scope': 'read:user read:org',
-        'state': state,
-        'allow_signup': 'false',
-      },
-    );
+    final redirectUri = '$base/auth/${p.id}/callback';
+    final url = p.kind == 'google'
+        ? Uri.parse(config.googleAuthUrl).replace(
+            queryParameters: {
+              'client_id': p.clientId,
+              'redirect_uri': redirectUri,
+              'response_type': 'code',
+              'scope': 'openid email profile',
+              'state': state,
+              'prompt': 'select_account',
+            },
+          )
+        : Uri.parse('${config.githubUrl}/login/oauth/authorize').replace(
+            queryParameters: {
+              'client_id': p.clientId,
+              'redirect_uri': redirectUri,
+              'scope': 'read:user read:org user:email',
+              'state': state,
+              'allow_signup': 'false',
+            },
+          );
     return Response.found(
       url,
       headers: {
@@ -173,7 +250,7 @@ class LoginService {
     );
   }
 
-  Future<Response> _callback(Request request) async {
+  Future<Response> _callback(Request request, AuthProviderConfig p) async {
     final q = request.url.queryParameters;
     final base = baseUrl(request);
     final clearState = _cookie(
@@ -193,6 +270,7 @@ class LoginService {
     final pending = state == null ? null : _pending.remove(state);
     final cookieState = _readCookie(request, _stateCookie);
     if (pending == null ||
+        pending.providerId != p.id ||
         !pending.expiresAt.isAfter(_now()) ||
         cookieState == null ||
         !constantTimeEquals(cookieState, state!)) {
@@ -203,36 +281,40 @@ class LoginService {
       );
     }
     if (q['error'] != null) {
-      return fail(403, 'Sign-in cancelled', 'GitHub did not sign you in.');
+      return fail(403, 'Sign-in cancelled', '${p.name} did not sign you in.');
     }
     final code = q['code'];
     if (code == null || code.isEmpty) {
-      return fail(400, 'Cannot sign in', 'GitHub sent no code.');
+      return fail(400, 'Cannot sign in', '${p.name} sent no code.');
     }
 
-    final _GitHubPerson person;
+    final _Person person;
     try {
-      person = await _fetchPerson(code, '$base/auth/github/callback');
+      person = p.kind == 'google'
+          ? await _fetchGoogle(p, code, '$base/auth/${p.id}/callback')
+          : await _fetchGitHub(p, code, '$base/auth/${p.id}/callback');
     } on _LoginFailure catch (e) {
       return fail(502, 'Cannot sign in', e.message);
     }
 
     final candidate = Member(
-      id: 'github:${person.id}',
+      id: '${p.kind}:${person.id}',
       login: person.login,
       name: person.name,
       email: person.email,
       avatarUrl: person.avatarUrl,
       orgs: person.orgs,
+      emails: person.emails,
+      provider: p.id,
       createdAt: _now(),
       lastSeenAt: _now(),
     );
-    if (!allowed(candidate)) {
+    if (!matchesAllowList(p, candidate)) {
       return fail(
         403,
         'Not allowed',
-        '${person.login} is not in an organisation (or on the list) this '
-            'server lets in.',
+        '${person.login} is not on the list this server lets in through '
+            '${p.name}.',
       );
     }
 
@@ -247,6 +329,7 @@ class LoginService {
           email: candidate.email,
           avatarUrl: candidate.avatarUrl,
           orgs: candidate.orgs,
+          emails: candidate.emails,
           lastSeenAt: now,
         );
       } else {
@@ -304,9 +387,13 @@ class LoginService {
     );
   }
 
-  // --------------------------------------------------------------- GitHub
+  // ------------------------------------------------------------ providers
 
-  Future<_GitHubPerson> _fetchPerson(String code, String redirectUri) async {
+  Future<_Person> _fetchGitHub(
+    AuthProviderConfig p,
+    String code,
+    String redirectUri,
+  ) async {
     final client = _http();
     try {
       final tokenResponse = await client
@@ -314,8 +401,8 @@ class LoginService {
             Uri.parse('${config.githubUrl}/login/oauth/access_token'),
             headers: {'accept': 'application/json'},
             body: {
-              'client_id': config.githubClientId!,
-              'client_secret': config.githubClientSecret!,
+              'client_id': p.clientId,
+              'client_secret': p.clientSecret!,
               'code': code,
               'redirect_uri': redirectUri,
             },
@@ -355,18 +442,88 @@ class LoginService {
           }
         }
       }
-      return _GitHubPerson(
+      // Only addresses GitHub has verified count towards the allow-list.
+      final emails = <String>{};
+      final emailsResponse = await api('/user/emails');
+      if (emailsResponse.statusCode == 200) {
+        final decoded = jsonDecode(emailsResponse.body);
+        if (decoded is List) {
+          for (final e in decoded) {
+            if (e is Map && e['verified'] == true && e['email'] is String) {
+              emails.add((e['email'] as String).toLowerCase());
+            }
+          }
+        }
+      }
+      return _Person(
         id: '${userJson['id']}',
         login: '${userJson['login']}',
         name: userJson['name'] as String?,
         email: userJson['email'] as String?,
         avatarUrl: userJson['avatar_url'] as String?,
         orgs: orgs,
+        emails: emails.toList(),
       );
     } on _LoginFailure {
       rethrow;
     } catch (_) {
       throw _LoginFailure('GitHub could not be reached. Try again.');
+    } finally {
+      client.close();
+    }
+  }
+
+  Future<_Person> _fetchGoogle(
+    AuthProviderConfig p,
+    String code,
+    String redirectUri,
+  ) async {
+    final client = _http();
+    try {
+      final tokenResponse = await client
+          .post(
+            Uri.parse(config.googleTokenUrl),
+            headers: {'accept': 'application/json'},
+            body: {
+              'client_id': p.clientId,
+              'client_secret': p.clientSecret!,
+              'code': code,
+              'redirect_uri': redirectUri,
+              'grant_type': 'authorization_code',
+            },
+          )
+          .timeout(const Duration(seconds: 15));
+      final tokenJson = _decode(tokenResponse.body);
+      final accessToken = tokenJson['access_token'];
+      if (tokenResponse.statusCode != 200 || accessToken is! String) {
+        throw _LoginFailure('Google did not accept the sign-in. Start again.');
+      }
+      final info = await client
+          .get(
+            Uri.parse(config.googleUserinfoUrl),
+            headers: {'authorization': 'Bearer $accessToken'},
+          )
+          .timeout(const Duration(seconds: 15));
+      final json = _decode(info.body);
+      if (info.statusCode != 200 || json['sub'] == null) {
+        throw _LoginFailure('Could not read your Google profile.');
+      }
+      final email = json['email'] as String?;
+      final verified = json['email_verified'] == true;
+      return _Person(
+        id: '${json['sub']}',
+        login: email ?? '${json['sub']}',
+        name: json['name'] as String?,
+        email: email,
+        avatarUrl: json['picture'] as String?,
+        orgs: const [],
+        // An address Google has not verified proves nothing.
+        emails: email != null && verified ? [email.toLowerCase()] : const [],
+      );
+    } on _LoginFailure {
+      rethrow;
+    } catch (_) {
+      throw _LoginFailure('Google could not be reached. Try again.');
     } finally {
       client.close();
     }
@@ -419,11 +576,12 @@ class LoginService {
   }
 }
 
-class _GitHubPerson {
-  _GitHubPerson({
+class _Person {
+  _Person({
     required this.id,
     required this.login,
     required this.orgs,
+    required this.emails,
     this.name,
     this.email,
     this.avatarUrl,
@@ -434,6 +592,7 @@ class _GitHubPerson {
   final String? email;
   final String? avatarUrl;
   final List<String> orgs;
+  final List<String> emails;
 }
 
 class _LoginFailure implements Exception {

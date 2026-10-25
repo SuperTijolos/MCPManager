@@ -73,6 +73,27 @@ class PgStatePersistence implements StatePersistence {
         }),
       );
     }
+    final authSecrets = {
+      for (final r in rows['auth_provider_secrets']!)
+        r['provider_id'] as String: r['client_secret'] as String,
+    };
+    for (final r in rows['auth_providers']!) {
+      final id = r['id'] as String;
+      state.authProviders.add(
+        AuthProviderConfig.fromJson({
+          'id': id,
+          'kind': r['kind'],
+          'name': r['name'],
+          'clientId': r['client_id'],
+          'clientSecret': authSecrets[id],
+          'enabled': r['enabled'],
+          'orgs': _strings(r['orgs']),
+          'users': _strings(r['users']),
+          'domains': _strings(r['domains']),
+          'emails': _strings(r['emails']),
+        }),
+      );
+    }
     for (final r in rows['server_oauth']!) {
       state.upstreamOAuth[r['server_id'] as String] = OAuthSession.fromJson(
         _jsonMap(r['session']),
@@ -138,6 +159,8 @@ class PgStatePersistence implements StatePersistence {
           'email': r['email'],
           'avatarUrl': r['avatar_url'],
           'orgs': _strings(r['orgs']),
+          'emails': _strings(r['emails']),
+          'provider': r['provider'],
           'role': r['role'],
           'createdAt': _iso(r['created_at']),
           'lastSeenAt': _iso(r['last_seen_at']),
@@ -263,6 +286,28 @@ class PgStatePersistence implements StatePersistence {
         };
       }
     }
+    i = 0;
+    for (final x in s.authProviders) {
+      out['auth_providers']![x.id] = {
+        'id': x.id,
+        'position': i++,
+        'kind': x.kind,
+        'name': x.name,
+        'client_id': x.clientId,
+        'enabled': x.enabled,
+        'orgs': x.orgs,
+        'users': x.users,
+        'domains': x.domains,
+        'emails': x.emails,
+      };
+      final secret = x.clientSecret;
+      if (secret != null && secret.isNotEmpty) {
+        out['auth_provider_secrets']![x.id] = {
+          'provider_id': x.id,
+          'client_secret': secret,
+        };
+      }
+    }
     for (final e in s.upstreamOAuth.entries) {
       if (s.servers.every((x) => x.id != e.key)) continue;
       out['server_oauth']![e.key] = {
@@ -326,6 +371,8 @@ class PgStatePersistence implements StatePersistence {
         'email': x.email,
         'avatar_url': x.avatarUrl,
         'orgs': x.orgs,
+        'emails': x.emails,
+        'provider': x.provider,
         'role': x.role,
         'created_at': x.createdAt,
         'last_seen_at': x.lastSeenAt,
@@ -410,6 +457,28 @@ const _tables = [
     'session': 'jsonb',
   }, touch: 'updated_at = now()'),
   _Table(
+    'auth_providers',
+    'id',
+    {
+      'id': 'text',
+      'position': 'int4',
+      'kind': 'text',
+      'name': 'text',
+      'client_id': 'text',
+      'enabled': 'boolean',
+      'orgs': '_text',
+      'users': '_text',
+      'domains': '_text',
+      'emails': '_text',
+    },
+    order: 'position',
+    touch: 'updated_at = now()',
+  ),
+  _Table('auth_provider_secrets', 'provider_id', {
+    'provider_id': 'text',
+    'client_secret': 'text',
+  }),
+  _Table(
     'llm_providers',
     'id',
     {
@@ -463,6 +532,8 @@ const _tables = [
     'email': 'text',
     'avatar_url': 'text',
     'orgs': '_text',
+    'emails': '_text',
+    'provider': 'text',
     'role': 'text',
     'created_at': 'timestamptz',
     'last_seen_at': 'timestamptz',

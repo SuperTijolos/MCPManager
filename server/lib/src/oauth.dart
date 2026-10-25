@@ -254,9 +254,13 @@ class OAuthServer {
         null,
         member: member,
         csrf: member == null ? null : login.csrfFor(token!),
-        signInUrl: login.enabled && member == null
-            ? '/auth/github?return_to=${Uri.encodeQueryComponent(here)}'
-            : null,
+        signIn: member == null
+            ? {
+                for (final p in login.enabledProviders())
+                  p.name:
+                      '/auth/${p.id}?return_to=${Uri.encodeQueryComponent(here)}',
+              }
+            : const {},
       ),
       redirect: checked.redirectUri,
     );
@@ -364,7 +368,7 @@ class OAuthServer {
     String? error, {
     Member? member,
     String? csrf,
-    String? signInUrl,
+    Map<String, String> signIn = const {},
   }) {
     final portal = portalId == null ? null : store.state.portal(portalId);
     final host = Uri.parse(q['redirect_uri']!).host;
@@ -388,7 +392,7 @@ ${portal == null ? 'the tools of this gateway' : 'the portal <strong>${escapeHtm
 ${error == null ? '' : '<p class="error">${escapeHtml(error)}</p>'}
 <form method="post" action="/oauth/authorize">
 $hidden
-${member != null ? '<p class="hint">Signed in as <strong>${escapeHtml(member.login)}</strong>.</p><input type="hidden" name="csrf" value="${escapeHtml(csrf ?? '')}">' : '${signInUrl == null ? '' : '<p><a class="button" href="${escapeHtml(signInUrl)}">Sign in with GitHub</a></p><p class="hint">or use the admin token:</p>'}<label>Admin token<input type="password" name="password" autocomplete="current-password" ${signInUrl == null ? 'autofocus ' : ''}required></label>'}
+${member != null ? '<p class="hint">Signed in as <strong>${escapeHtml(member.login)}</strong>.</p><input type="hidden" name="csrf" value="${escapeHtml(csrf ?? '')}">' : '${signIn.isEmpty ? '' : '${[for (final e in signIn.entries) '<p><a class="button" href="${escapeHtml(e.value)}">Sign in with ${escapeHtml(e.key)}</a></p>'].join()}<p class="hint">or use the admin token:</p>'}<label>Admin token<input type="password" name="password" autocomplete="current-password" ${signIn.isEmpty ? 'autofocus ' : ''}required></label>'}
 <div class="row">
 <button type="submit" name="decision" value="allow">Allow</button>
 <button type="submit" name="decision" value="deny" class="secondary" formnovalidate>Deny</button>

@@ -363,6 +363,8 @@ class Member {
     this.email,
     this.avatarUrl,
     this.orgs = const [],
+    this.emails = const [],
+    this.provider = 'github',
     this.role = 'admin',
     this.lastSeenAt,
   });
@@ -375,6 +377,12 @@ class Member {
 
   /// The GitHub organisations they belonged to at their last sign-in.
   final List<String> orgs;
+
+  /// Email addresses the sign-in provider says are verified.
+  final List<String> emails;
+
+  /// The sign-in provider they came through (its id, e.g. `github`).
+  final String provider;
   final String role;
   final DateTime createdAt;
   final DateTime? lastSeenAt;
@@ -385,6 +393,7 @@ class Member {
     String? email,
     String? avatarUrl,
     List<String>? orgs,
+    List<String>? emails,
     DateTime? lastSeenAt,
   }) => Member(
     id: id,
@@ -393,6 +402,8 @@ class Member {
     email: email ?? this.email,
     avatarUrl: avatarUrl ?? this.avatarUrl,
     orgs: orgs ?? this.orgs,
+    emails: emails ?? this.emails,
+    provider: provider,
     role: role,
     createdAt: createdAt,
     lastSeenAt: lastSeenAt ?? this.lastSeenAt,
@@ -405,6 +416,8 @@ class Member {
     'email': ?email,
     'avatarUrl': ?avatarUrl,
     'orgs': orgs,
+    'emails': emails,
+    'provider': provider,
     'role': role,
     'createdAt': createdAt.toUtc().toIso8601String(),
     if (lastSeenAt != null) 'lastSeenAt': lastSeenAt!.toUtc().toIso8601String(),
@@ -417,6 +430,8 @@ class Member {
     email: json['email'] as String?,
     avatarUrl: json['avatarUrl'] as String?,
     orgs: [for (final o in (json['orgs'] as List?) ?? const []) '$o'],
+    emails: [for (final e in (json['emails'] as List?) ?? const []) '$e'],
+    provider: json['provider'] as String? ?? 'github',
     role: json['role'] as String? ?? 'admin',
     createdAt: DateTime.parse(json['createdAt'] as String),
     lastSeenAt: _date(json['lastSeenAt']),
@@ -531,4 +546,129 @@ class LlmProviderConfig {
     models: [for (final m in (json['models'] as List?) ?? const []) '$m'],
     contextLength: json['contextLength'] as int?,
   );
+}
+
+/// A way to sign in to the dashboard (a GitHub or Google OAuth app) and who it
+/// lets in. Its secret is stored here and never returned (see [toPublicJson]).
+class AuthProviderConfig {
+  const AuthProviderConfig({
+    required this.id,
+    required this.kind,
+    required this.name,
+    this.clientId = '',
+    this.clientSecret,
+    this.enabled = true,
+    this.orgs = const [],
+    this.users = const [],
+    this.domains = const [],
+    this.emails = const [],
+    this.fromEnvironment = false,
+  });
+
+  static const kinds = ['github', 'google'];
+
+  /// The address segment: sign-in starts at `/auth/<id>`.
+  final String id;
+
+  /// `github` or `google`.
+  final String kind;
+  final String name;
+  final String clientId;
+  final String? clientSecret;
+  final bool enabled;
+
+  /// GitHub only: members of these organisations may sign in.
+  final List<String> orgs;
+
+  /// GitHub only: these logins may sign in.
+  final List<String> users;
+
+  /// Anyone whose verified email is at one of these domains may sign in.
+  final List<String> domains;
+
+  /// These verified email addresses may sign in.
+  final List<String> emails;
+
+  /// Set by the server's environment (read-only here).
+  final bool fromEnvironment;
+
+  bool get configured => clientId.isNotEmpty && (clientSecret ?? '').isNotEmpty;
+
+  /// Whether anyone at all can get in through it.
+  bool get hasAllowList =>
+      orgs.isNotEmpty ||
+      users.isNotEmpty ||
+      domains.isNotEmpty ||
+      emails.isNotEmpty;
+
+  AuthProviderConfig copyWith({
+    String? name,
+    String? clientId,
+    String? clientSecret,
+    bool clearClientSecret = false,
+    bool? enabled,
+    List<String>? orgs,
+    List<String>? users,
+    List<String>? domains,
+    List<String>? emails,
+  }) => AuthProviderConfig(
+    id: id,
+    kind: kind,
+    name: name ?? this.name,
+    clientId: clientId ?? this.clientId,
+    clientSecret: clearClientSecret ? null : clientSecret ?? this.clientSecret,
+    enabled: enabled ?? this.enabled,
+    orgs: orgs ?? this.orgs,
+    users: users ?? this.users,
+    domains: domains ?? this.domains,
+    emails: emails ?? this.emails,
+    fromEnvironment: fromEnvironment,
+  );
+
+  Json toJson() => {
+    'id': id,
+    'kind': kind,
+    'name': name,
+    'clientId': clientId,
+    'clientSecret': ?clientSecret,
+    'enabled': enabled,
+    'orgs': orgs,
+    'users': users,
+    'domains': domains,
+    'emails': emails,
+  };
+
+  /// What the dashboard may see: never the secret.
+  Json toPublicJson(String callbackUrl) => {
+    'id': id,
+    'kind': kind,
+    'name': name,
+    'clientId': clientId,
+    'hasSecret': (clientSecret ?? '').isNotEmpty,
+    'enabled': enabled,
+    'orgs': orgs,
+    'users': users,
+    'domains': domains,
+    'emails': emails,
+    'source': fromEnvironment ? 'environment' : 'database',
+    'callbackUrl': callbackUrl,
+  };
+
+  factory AuthProviderConfig.fromJson(Json json) {
+    List<String> list(String k) => [
+      for (final e in (json[k] as List?) ?? const []) '$e',
+    ];
+    return AuthProviderConfig(
+      id: json['id'] as String,
+      kind: json['kind'] as String,
+      name: json['name'] as String,
+      clientId: json['clientId'] as String? ?? '',
+      clientSecret: json['clientSecret'] as String?,
+      enabled: json['enabled'] as bool? ?? true,
+      orgs: list('orgs'),
+      users: list('users'),
+      domains: list('domains'),
+      emails: list('emails'),
+    );
+  }
 }

@@ -19,6 +19,7 @@ class PortalState {
     List<DashSession>? sessions,
     Map<String, OAuthSession>? upstreamOAuth,
     List<LlmProviderConfig>? llmProviders,
+    List<AuthProviderConfig>? authProviders,
   }) : servers = servers ?? [],
        portals = portals ?? [],
        tokens = tokens ?? [],
@@ -29,7 +30,8 @@ class PortalState {
        members = members ?? [],
        sessions = sessions ?? [],
        upstreamOAuth = upstreamOAuth ?? {},
-       llmProviders = llmProviders ?? [];
+       llmProviders = llmProviders ?? [],
+       authProviders = authProviders ?? [];
 
   /// Set when the admin token was generated at first start.
   String? adminTokenHash;
@@ -52,6 +54,10 @@ class PortalState {
   /// Language-model endpoints for the dashboard's chat (keys are secrets).
   final List<LlmProviderConfig> llmProviders;
 
+  /// The ways to sign in to the dashboard that were set up in the dashboard
+  /// (the environment's GitHub app is separate). Secrets.
+  final List<AuthProviderConfig> authProviders;
+
   UpstreamServer? server(String id) =>
       servers.where((s) => s.id == id).firstOrNull;
   Portal? portal(String id) => portals.where((p) => p.id == id).firstOrNull;
@@ -71,6 +77,7 @@ class PortalState {
     'members': [for (final m in members) m.toJson()],
     'sessions': [for (final x in sessions) x.toJson()],
     'llmProviders': [for (final p in llmProviders) p.toJson()],
+    'authProviders': [for (final p in authProviders) p.toJson()],
     'upstreamOAuth': {
       for (final e in upstreamOAuth.entries) e.key: e.value.toJson(),
     },
@@ -98,6 +105,7 @@ class PortalState {
       members: list('members', Member.fromJson),
       sessions: list('sessions', DashSession.fromJson),
       llmProviders: list('llmProviders', LlmProviderConfig.fromJson),
+      authProviders: list('authProviders', AuthProviderConfig.fromJson),
       upstreamOAuth: {
         for (final e in ((json['upstreamOAuth'] as Map?) ?? const {}).entries)
           '${e.key}': OAuthSession.fromJson(
@@ -139,6 +147,7 @@ class StateStore {
     'servers',
     'upstreamOAuth',
     'llmProviders',
+    'authProviders',
     'portals',
     'tokens',
     'rules',
