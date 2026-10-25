@@ -45,11 +45,12 @@ class LlmSettings {
 /// return a fake provider.
 final llmProviderFactoryProvider =
     Provider<LlmProvider Function(ProviderConfig)>((ref) {
-      final session = ref.watch(sessionProvider);
+      final serverUrl = ref.watch(sessionProvider.select((s) => s.serverUrl));
+      final token = ref.watch(sessionProvider.select((s) => s.token));
       return (config) {
         final proxied = config.copyWith(
-          baseUrl: '${session.serverUrl}/api/llm/providers/${config.id}/proxy',
-          apiKey: session.token,
+          baseUrl: '$serverUrl/api/llm/providers/${config.id}/proxy',
+          apiKey: token,
         );
         return switch (config.kind) {
           ProviderKind.ollama => OllamaLlmProvider(proxied),

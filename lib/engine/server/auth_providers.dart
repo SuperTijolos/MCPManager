@@ -21,6 +21,7 @@ class AuthProviderInfo {
     required this.users,
     required this.domains,
     required this.emails,
+    required this.defaultRole,
     required this.fromEnvironment,
     required this.callbackUrl,
   });
@@ -37,6 +38,9 @@ class AuthProviderInfo {
   final List<String> users;
   final List<String> domains;
   final List<String> emails;
+
+  /// The role people get when this provider's list lets them in.
+  final String defaultRole;
 
   /// Set by the server's environment; can be seen but not changed here.
   final bool fromEnvironment;
@@ -67,6 +71,7 @@ class AuthProviderInfo {
       users: list('users'),
       domains: list('domains'),
       emails: list('emails'),
+      defaultRole: json['defaultRole'] as String? ?? 'viewer',
       fromEnvironment: json['source'] == 'environment',
       callbackUrl: json['callbackUrl'] as String? ?? '',
     );
@@ -129,6 +134,7 @@ class AuthProvidersNotifier
     List<String> users = const [],
     List<String> domains = const [],
     List<String> emails = const [],
+    String? defaultRole,
   }) async {
     await _api.postMap('/api/auth/providers', {
       'kind': kind,
@@ -141,6 +147,7 @@ class AuthProvidersNotifier
       'users': users,
       'domains': domains,
       'emails': emails,
+      'defaultRole': ?defaultRole,
     });
     await reload();
   }
@@ -157,6 +164,7 @@ class AuthProvidersNotifier
     List<String>? users,
     List<String>? domains,
     List<String>? emails,
+    String? defaultRole,
   }) async {
     await _api.putMap('/api/auth/providers/$id', {
       'name': ?name,
@@ -167,6 +175,7 @@ class AuthProvidersNotifier
       'users': ?users,
       'domains': ?domains,
       'emails': ?emails,
+      'defaultRole': ?defaultRole,
     });
     await reload();
   }

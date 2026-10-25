@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../engine/core/prefs.dart';
+import '../engine/server/access.dart';
 import '../ui/theme.dart';
 import 'routes.dart';
 
@@ -41,9 +42,19 @@ class _AppShellState extends ConsumerState<AppShell> {
     );
   }
 
+  /// The pages this person is offered.
+  List<AppDestination> get _main {
+    final access = ref.read(accessProvider);
+    return [
+      for (final d in mainDestinations)
+        if (d.permission == null || access.can(d.permission!)) d,
+    ];
+  }
+
   int get _mainIndex {
-    for (var i = 0; i < mainDestinations.length; i++) {
-      final path = mainDestinations[i].path;
+    final main = _main;
+    for (var i = 0; i < main.length; i++) {
+      final path = main[i].path;
       if (path == '/'
           ? widget.location == '/'
           : widget.location.startsWith(path)) {
@@ -59,6 +70,8 @@ class _AppShellState extends ConsumerState<AppShell> {
 
   @override
   Widget build(BuildContext context) {
+    ref.watch(identityRefresherProvider);
+    ref.watch(accessProvider);
     final width = MediaQuery.sizeOf(context).width;
     if (width < kWideBreakpoint) {
       return _narrowLayout(context);
@@ -69,11 +82,12 @@ class _AppShellState extends ConsumerState<AppShell> {
   }
 
   Widget _wideLayout(BuildContext context, {required bool expanded}) {
-    final all = [...mainDestinations, ...secondaryDestinations];
+    final main = _main;
+    final all = [...main, ...secondaryDestinations];
     final selected = _mainIndex >= 0
         ? _mainIndex
         : _secondaryIndex >= 0
-        ? mainDestinations.length + _secondaryIndex
+        ? main.length + _secondaryIndex
         : 0;
     return Scaffold(
       body: Row(
@@ -105,7 +119,7 @@ class _AppShellState extends ConsumerState<AppShell> {
   }
 
   Widget _narrowLayout(BuildContext context) {
-    final all = [...mainDestinations, ...secondaryDestinations];
+    final all = [..._main, ...secondaryDestinations];
     final current = all.where(
       (d) => d.path == '/'
           ? widget.location == '/'

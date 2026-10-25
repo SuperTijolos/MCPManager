@@ -2,6 +2,10 @@ import 'dart:async';
 
 export 'platform_stub.dart' if (dart.library.js_interop) 'platform_web.dart';
 
+/// A session token and the server it came from, as the server puts them in
+/// the address when it sends the browser back.
+typedef HandedSession = ({String? token, String? server});
+
 /// A browser window used for the interactive part of signing in to an
 /// upstream MCP server. It must be opened synchronously inside a click
 /// handler (or browsers block it), so opening and pointing it somewhere are

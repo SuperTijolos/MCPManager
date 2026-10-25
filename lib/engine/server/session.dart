@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 
 import '../core/json.dart';
 import '../core/prefs.dart';
+import 'access.dart';
 import 'platform.dart';
 import 'server_client.dart';
 
@@ -32,6 +33,8 @@ class SessionIdentity {
     this.login,
     this.name,
     this.avatarUrl,
+    this.role,
+    this.access,
   });
 
   /// `member` (signed in with a provider) or `admin` (the admin token).
@@ -40,6 +43,10 @@ class SessionIdentity {
   final String? login;
   final String? name;
   final String? avatarUrl;
+  final String? role;
+
+  /// What they may do; null from a server that does not say.
+  final Access? access;
 
   String get label => switch (kind) {
     'admin' => 'Admin token',
@@ -54,6 +61,10 @@ class SessionIdentity {
       login: member?['login'] as String?,
       name: member?['name'] as String?,
       avatarUrl: member?['avatarUrl'] as String?,
+      role: member?['role'] as String?,
+      access: json['access'] is Map
+          ? Access.fromJson((json['access'] as Map).cast<String, dynamic>())
+          : null,
     );
   }
 }
@@ -120,9 +131,19 @@ class SessionNotifier extends Notifier<SessionState> {
     var url = raw is Map ? raw['url'] as String? : null;
     var token = raw is Map ? raw['token'] as String? : null;
 
-    // Coming back from the server's GitHub sign-in: the token is in the address.
+    // Coming back from the server's sign-in: the token is in the address. A
+    // server named there is only shown on the sign-in page, never trusted
+    // with a token the dashboard did not ask for.
     final handed = takeSessionFromUrl();
-    if (handed != null && url != null && url.isNotEmpty) token = handed;
+    if (handed != null) {
+      if (url != null && url.isNotEmpty) {
+        if (handed.token != null) token = handed.token;
+      } else if (handed.server != null) {
+        url = normalizeServerUrl(handed.server!);
+        token = null;
+        _save(url, null);
+      }
+    }
 
     if (url == null || url.isEmpty) {
       return SessionState(serverUrl: url);
@@ -254,6 +275,33 @@ class SessionNotifier extends Notifier<SessionState> {
     }
   }
 
+  /// Asks the server who we are again, for when our role changed. A failure
+  /// (other than being signed out) keeps what is shown.
+  Future<void> refreshIdentity() async {
+    final url = state.serverUrl;
+    final token = state.token;
+    if (!state.signedIn || url == null || token == null) return;
+    final client = ServerClient(
+      baseUrl: url,
+      token: token,
+      httpClient: ref.read(serverHttpClientProvider)(),
+    );
+    try {
+      final me = await client.getMap('/api/me');
+      if (!ref.mounted || !state.signedIn || state.token != token) return;
+      state = SessionState(
+        status: SessionStatus.signedIn,
+        serverUrl: url,
+        token: token,
+        identity: SessionIdentity.fromJson(me),
+      );
+    } on ServerException catch (e) {
+      if (ref.mounted && e.unauthorized) expired();
+    } finally {
+      client.close();
+    }
+  }
+
   /// Tries again after the server could not be reached.
   Future<void> retry() async {
     if (state.token == null) return;
@@ -311,12 +359,26 @@ final oauthRedirectUriProvider = Provider<Uri>((ref) {
   return Uri.parse('$url/oauth/upstream/callback');
 });
 
+/// The address this dashboard is served from, for links that send people
+/// back to it. Null when it is not a web address (tests).
+final dashboardAddressProvider = Provider<String?>((ref) {
+  final u = currentAppUri();
+  if (u.scheme != 'http' && u.scheme != 'https') return null;
+  return Uri(
+    scheme: u.scheme,
+    host: u.host,
+    port: u.hasPort ? u.port : null,
+    path: u.path.isEmpty ? '/' : u.path,
+  ).toString();
+});
+
 /// The client for the signed-in server, or null when nobody is signed in.
 final serverClientProvider = Provider<ServerClient?>((ref) {
-  final session = ref.watch(sessionProvider);
-  final url = session.serverUrl;
-  final token = session.token;
-  if (!session.signedIn || url == null || token == null) return null;
+  // Only these three: a change of role must not rebuild the client.
+  final signedIn = ref.watch(sessionProvider.select((s) => s.signedIn));
+  final url = ref.watch(sessionProvider.select((s) => s.serverUrl));
+  final token = ref.watch(sessionProvider.select((s) => s.token));
+  if (!signedIn || url == null || token == null) return null;
   final client = ServerClient(
     baseUrl: url,
     token: token,

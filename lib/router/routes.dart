@@ -15,25 +15,59 @@ import 'pages/tools/tools_page.dart';
 import 'shell.dart';
 
 class AppDestination {
-  const AppDestination(this.path, this.label, this.icon, this.selectedIcon);
+  const AppDestination(
+    this.path,
+    this.label,
+    this.icon,
+    this.selectedIcon, {
+    this.permission,
+  });
 
   final String path;
   final String label;
   final IconData icon;
   final IconData selectedIcon;
+
+  /// What the person needs to be offered this page; null for everyone.
+  final String? permission;
 }
 
 const mainDestinations = [
   AppDestination('/', 'Overview', Icons.dashboard_outlined, Icons.dashboard),
-  AppDestination('/mcp-servers', 'MCP Servers', Icons.dns_outlined, Icons.dns),
-  AppDestination('/mcp-tools', 'MCP Tools', Icons.build_outlined, Icons.build),
-  AppDestination('/mcp-portals', 'MCP Portals', Icons.hub_outlined, Icons.hub),
-  AppDestination('/chat', 'Chat', Icons.chat_bubble_outline, Icons.chat_bubble),
+  AppDestination(
+    '/mcp-servers',
+    'MCP Servers',
+    Icons.dns_outlined,
+    Icons.dns,
+    permission: 'servers.view',
+  ),
+  AppDestination(
+    '/mcp-tools',
+    'MCP Tools',
+    Icons.build_outlined,
+    Icons.build,
+    permission: 'tools.view',
+  ),
+  AppDestination(
+    '/mcp-portals',
+    'MCP Portals',
+    Icons.hub_outlined,
+    Icons.hub,
+    permission: 'portals.view',
+  ),
+  AppDestination(
+    '/chat',
+    'Chat',
+    Icons.chat_bubble_outline,
+    Icons.chat_bubble,
+    permission: 'chats.use',
+  ),
   AppDestination(
     '/audit',
     'Audit',
     Icons.receipt_long_outlined,
     Icons.receipt_long,
+    permission: 'audit.view',
   ),
   AppDestination('/settings', 'Settings', Icons.tune_outlined, Icons.tune),
 ];

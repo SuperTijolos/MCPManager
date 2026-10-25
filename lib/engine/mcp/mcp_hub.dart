@@ -6,6 +6,7 @@ import '../audit/audit_log.dart';
 import '../audit/audit_models.dart';
 import '../core/json.dart';
 import '../core/redact.dart';
+import '../server/access.dart';
 import '../server/platform.dart';
 import '../server/server_client.dart';
 import '../server/server_events.dart';
@@ -221,7 +222,9 @@ class McpHub extends Notifier<McpHubState> {
       if (recheck) {
         await client.send('POST', '/api/health/check');
       }
-      final list = await client.getList('/api/servers');
+      final list = ref.read(accessProvider).can('servers.view')
+          ? await client.getList('/api/servers')
+          : <Json>[];
       if (!ref.mounted) return true;
       if (generation != _generation) return false;
       final previous = {for (final s in state.servers) s.config.id: s};
@@ -230,7 +233,10 @@ class McpHub extends Notifier<McpHubState> {
         for (final j in list)
           _runtimeFor(j, previous[j['id']], connecting: j['enabled'] != false),
       ]);
-      final tools = await client.getMap('/api/tools');
+      final access = ref.read(accessProvider);
+      final tools = access.can('tools.view')
+          ? await client.getMap('/api/tools')
+          : <String, dynamic>{};
       final health = await client.getMap('/api/health');
       if (!ref.mounted) return true;
       if (generation != _generation) return false;

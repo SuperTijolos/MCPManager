@@ -8,16 +8,22 @@ Uri currentAppUri() => Uri.parse(web.window.location.href);
 
 void navigateTo(Uri url) => web.window.location.assign(url.toString());
 
-String? takeSessionFromUrl() {
+HandedSession? takeSessionFromUrl() {
   final fragment = web.window.location.hash;
   if (fragment.length < 2) return null;
   final params = Uri.splitQueryString(fragment.substring(1));
   final token = params['session'];
-  if (token == null || token.isEmpty) return null;
+  final server = params['server'];
+  if ((token == null || token.isEmpty) && (server == null || server.isEmpty)) {
+    return null;
+  }
   // Do not leave the token in the address bar or the history.
   final clean = Uri.parse(web.window.location.href).removeFragment();
   web.window.history.replaceState(null, '', clean.toString());
-  return token;
+  return (
+    token: token == null || token.isEmpty ? null : token,
+    server: server == null || server.isEmpty ? null : server,
+  );
 }
 
 AuthPopup openAuthPopup() {

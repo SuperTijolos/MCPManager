@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../engine/server/access.dart';
+import '../../../engine/server/access_control.dart';
 import '../../../engine/server/auth_providers.dart';
 import '../../../engine/server/server_client.dart';
 import '../../../ui/theme.dart';
@@ -87,6 +89,7 @@ class _ProviderCard extends ConsumerWidget {
     final muted = theme.textTheme.bodySmall?.copyWith(
       color: theme.colorScheme.onSurfaceVariant,
     );
+    final roleName = ref.watch(accessControlProvider).roleName(p.defaultRole);
     final lines = <String>[
       if (p.orgs.isNotEmpty) 'Organisations: ${p.orgs.join(', ')}',
       if (p.users.isNotEmpty) 'GitHub logins: ${p.users.join(', ')}',
@@ -136,7 +139,9 @@ class _ProviderCard extends ConsumerWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              lines.isEmpty ? 'Nobody is let in.' : lines.join('\n'),
+              lines.isEmpty
+                  ? 'Nobody is let in.'
+                  : '${lines.join('\n')}\nThey start as: $roleName',
               style: muted,
             ),
             if (problem != null) ...[
@@ -254,6 +259,7 @@ class _AuthProviderDialogState extends ConsumerState<AuthProviderDialog> {
   );
   String? _error;
   bool _saving = false;
+  late String _defaultRole = widget.existing?.defaultRole ?? 'viewer';
 
   static String _join(List<String>? l) => (l ?? const []).join(', ');
 
@@ -297,6 +303,7 @@ class _AuthProviderDialogState extends ConsumerState<AuthProviderDialog> {
           users: github ? _split(_users.text) : const [],
           domains: _split(_domains.text),
           emails: _split(_emails.text),
+          defaultRole: _defaultRole,
         );
       } else {
         await store.update(
@@ -309,6 +316,7 @@ class _AuthProviderDialogState extends ConsumerState<AuthProviderDialog> {
           users: github ? _split(_users.text) : null,
           domains: _split(_domains.text),
           emails: _split(_emails.text),
+          defaultRole: _defaultRole,
         );
       }
       if (mounted) Navigator.pop(context);
@@ -320,6 +328,31 @@ class _AuthProviderDialogState extends ConsumerState<AuthProviderDialog> {
         });
       }
     }
+  }
+
+  /// The roles that can be the default: ones this person has all the
+  /// permissions of (and the current choice, so it stays visible).
+  List<RoleInfo> _roleChoices(WidgetRef ref) {
+    final access = ref.watch(accessProvider);
+    final roles = ref.watch(accessControlProvider).roles;
+    final list = [
+      for (final r in roles)
+        if (r.id == _defaultRole || r.permissions.every(access.can)) r,
+    ];
+    if (list.every((r) => r.id != _defaultRole)) {
+      list.add(
+        RoleInfo(
+          id: _defaultRole,
+          name: _defaultRole,
+          description: '',
+          permissions: const {},
+          builtin: false,
+          members: 0,
+          invites: 0,
+        ),
+      );
+    }
+    return list;
   }
 
   @override
@@ -427,6 +460,22 @@ class _AuthProviderDialogState extends ConsumerState<AuthProviderDialog> {
                   labelText: 'Email addresses',
                   hintText: 'ann@example.com',
                 ),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                key: const ValueKey('provider-default-role'),
+                initialValue: _defaultRole,
+                decoration: const InputDecoration(
+                  labelText: 'Role for people on this list',
+                  helperText:
+                      'What they may do when they first sign in. Change it '
+                      'for one person under Members.',
+                ),
+                items: [
+                  for (final r in _roleChoices(ref))
+                    DropdownMenuItem(value: r.id, child: Text(r.name)),
+                ],
+                onChanged: (v) => setState(() => _defaultRole = v ?? 'viewer'),
               ),
               if (_error != null) ...[
                 const SizedBox(height: 12),

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../server/access.dart';
 import '../server/server_client.dart';
 import '../server/server_events.dart';
 import '../server/session.dart';
@@ -78,7 +79,7 @@ class PortalController extends Notifier<PortalData> {
   @override
   PortalData build() {
     _client = ref.watch(serverClientProvider);
-    final url = ref.watch(sessionProvider).serverUrl ?? '';
+    final url = ref.watch(sessionProvider.select((s) => s.serverUrl)) ?? '';
     ref.onDispose(() => _debounce?.cancel());
     listenToServer(ref, (e) {
       final what = e.type == 'changed'
@@ -135,11 +136,19 @@ class PortalController extends Notifier<PortalData> {
     final api = PortalApi(client);
     final mine = ++_loads;
     try {
+      // Ask only for what this person may see.
+      final access = ref.read(accessProvider);
       final results = await Future.wait<Object>([
         api.status(),
-        api.servers(),
-        api.portals(),
-        api.tokens(),
+        access.can('servers.view')
+            ? api.servers()
+            : Future.value(const <GatewayServer>[]),
+        access.can('portals.view')
+            ? api.portals()
+            : Future.value(const <GatewayPortal>[]),
+        access.can('tokens.manage')
+            ? api.tokens()
+            : Future.value(const <GatewayToken>[]),
       ]);
       if (mine != _loads) return;
       state = state.copyWith(
